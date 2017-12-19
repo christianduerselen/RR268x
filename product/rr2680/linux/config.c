@@ -23,7 +23,7 @@ int init_config(void)
 
 char driver_name[] = "rr2680";
 char driver_name_long[] = "RocketRAID 268x controller driver";
-char driver_ver[] = "v2.1 (" __DATE__ " " __TIME__ ")";
+char driver_ver[] = "v2.2 (09.11.2017)";
 int  osm_max_targets = 32;
 int os_max_cache_size = 0x2000000;
 
