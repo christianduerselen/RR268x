@@ -16,11 +16,13 @@ module_param(autorebuild, int, 0);
 MODULE_PARM(autorebuild, "i");
 #endif
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,12))
 /* notifier block to get notified on system shutdown/halt/reboot */
 static int hpt_halt(struct notifier_block *nb, ulong event, void *buf);
 static struct notifier_block hpt_notifier = {
 	hpt_halt, NULL, 0
 };
+#endif
 
 static int hpt_init_one(HIM *him, struct pci_dev *pcidev)
 {
@@ -266,8 +268,10 @@ static void ldm_initialize_vbus_done(void *osext)
 }
 
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
 static int hpt_detect (Scsi_Host_Template *tpnt)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
 	struct pci_dev *pcidev;
 	HIM       *him;
 	int       i;
@@ -319,7 +323,11 @@ static int hpt_detect (Scsi_Host_Template *tpnt)
 
 		spin_lock_init(&initlock);
 		vbus_ext->lock = &initlock;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		timer_setup(&vbus_ext->timer, NULL, 0);
+#else 
 		init_timer(&vbus_ext->timer);
+#endif
 
 		for (hba = vbus_ext->hba_list; hba; hba = hba->next) {
 			if (!hba->ldm_adapter.him->initialize(hba->ldm_adapter.him_handle)) {
@@ -401,9 +409,18 @@ static int hpt_detect (Scsi_Host_Template *tpnt)
 		if (vbus_ext->tasks)
 			tasklet_schedule(&vbus_ext->worker);
 	}
+#else 
+	PVBUS_EXT vbus_ext;
+	PVBUS vbus;
+	int i = 0;
 
+	ldm_for_each_vbus(vbus, vbus_ext) {
+		i++;
+	}
+#endif
 	return i;
 }
+#endif
 
 static unsigned int fill_msense_rw_recovery(PVDEV pVDev, HPT_U8 *p, HPT_U32 output_len, HPT_U32 bufflen)
 {
@@ -1573,10 +1590,19 @@ static void hpt_flush_done(PCOMMAND pCmd)
 	up(sem);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+static void cmd_timeout_sem(struct timer_list *t)
+{
+	PSEM_TIMER psem_tm;
+	psem_tm = (PSEM_TIMER)from_timer(psem_tm, t, timer);
+	up(&psem_tm->sem);
+}
+#else 
 static void cmd_timeout_sem(unsigned long data)
 {
 	up((struct semaphore *)(HPT_UPTR)data);
 }
+#endif
 
 /*
  * flush a vdev (without retry).
@@ -1585,8 +1611,7 @@ static int hpt_flush_vdev(PVBUS_EXT vbus_ext, PVDEV vd)
 {
 	PCOMMAND pCmd;
 	unsigned long flags, timeout;
-	struct timer_list timer;
-	struct semaphore sem;
+	SEM_TIMER sem_tm;
 	int result = 0;
 	HPT_UINT count;
 
@@ -1610,31 +1635,40 @@ static int hpt_flush_vdev(PVBUS_EXT vbus_ext, PVDEV vd)
 	pCmd->type = CMD_TYPE_FLUSH;
 	pCmd->flags.hard_flush = 1;
 	pCmd->target = vd;
-	pCmd->priv2 = (HPT_UPTR)&sem;
+	pCmd->priv2 = (HPT_UPTR)&sem_tm.sem;
 	pCmd->done = hpt_flush_done;
 
-	sema_init(&sem, 0);
+	sema_init(&sem_tm.sem, 0);
 	ldm_queue_cmd(pCmd);
 
 wait:
 	spin_unlock_irqrestore(vbus_ext->lock, flags);
 
-	if (down_trylock(&sem)) {
+	if (down_trylock(&sem_tm.sem)) {
 		timeout = jiffies + 20 * HZ;
-		init_timer(&timer);
-		timer.expires = timeout;
-		timer.data = (HPT_UPTR)&sem;
-		timer.function = cmd_timeout_sem;
-		add_timer(&timer);
-		if (down_interruptible(&sem))
-			down(&sem);
-		del_timer(&timer);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		timer_setup_on_stack(&sem_tm.timer, NULL, 0);
+#else 
+		init_timer(&sem_tm.timer);
+		sem_tm.timer.data = (HPT_UPTR)&sem_tm.sem;
+#endif
+		sem_tm.timer.expires = timeout;
+		sem_tm.timer.function = cmd_timeout_sem;
+		add_timer(&sem_tm.timer);
+		if (down_interruptible(&sem_tm.sem))
+			down(&sem_tm.sem);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		del_timer_sync(&sem_tm.timer);
+		destroy_timer_on_stack(&sem_tm.timer);
+#else 
+		del_timer(&sem_tm.timer);
+#endif
 	}
 
 	spin_lock_irqsave(vbus_ext->lock, flags);
 
 	if (pCmd->Result==RETURN_PENDING) {
-		sema_init(&sem, 0);
+		sema_init(&sem_tm.sem, 0);
 		ldm_reset_vbus(vd->vbus);
 		goto wait;
 	}
@@ -1651,6 +1685,7 @@ wait:
 	return result;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
 /*
  * flush, unregister, and free all resources of a vbus_ext.
  * vbus_ext will be invalid after this function.
@@ -1728,9 +1763,12 @@ static int hpt_halt(struct notifier_block *nb, ulong event, void *buf)
 	}
 	return NOTIFY_OK;
 }
+#endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
 static int hpt_release (struct Scsi_Host *host)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
 	PVBUS_EXT vbus_ext = get_vbus_ext(host);
 
 	hpt_cleanup(vbus_ext);
@@ -1739,8 +1777,10 @@ static int hpt_release (struct Scsi_Host *host)
 		unregister_reboot_notifier(&hpt_notifier);
 
 	scsi_unregister(host);
+#endif
 	return 0;
 }
+#endif
 
 #ifndef CONFIG_SCSI_PROC_FS
 static void  __hpt_do_async_ioctl(PVBUS vbus,IOCTL_ARG* ioctl_args)
@@ -1864,16 +1904,25 @@ static void hpt_ioctl_done(struct _IOCTL_ARG *arg)
 	arg->ioctl_cmnd = 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+static void hpt_ioctl_timeout(struct timer_list *t)
+{
+
+	PSEM_TIMER psem_tm;
+	psem_tm = (PSEM_TIMER)from_timer(psem_tm, t, timer);
+	up(&psem_tm->sem);
+}
+#else 
 static void hpt_ioctl_timeout(unsigned long data)
 {
 	up((struct semaphore *)data);
 }
+#endif
 
 void __hpt_do_ioctl(PVBUS_EXT vbus_ext, IOCTL_ARG *ioctl_args)
 {
 	unsigned long flags, timeout;
-	struct timer_list timer;
-	struct semaphore sem;
+	SEM_TIMER sem_tm;
 
 	if (vbus_ext->needs_refresh
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,5,0)
@@ -1886,8 +1935,8 @@ void __hpt_do_ioctl(PVBUS_EXT vbus_ext, IOCTL_ARG *ioctl_args)
 
 	ioctl_args->result = -1;
 	ioctl_args->done = hpt_ioctl_done;
-	ioctl_args->ioctl_cmnd = &sem;
-	sema_init(&sem, 0);
+	ioctl_args->ioctl_cmnd = &sem_tm.sem;
+	sema_init(&sem_tm.sem, 0);
 
 	spin_lock_irqsave(vbus_ext->lock, flags);
 	ldm_ioctl((PVBUS)vbus_ext->vbus, ioctl_args);
@@ -1895,22 +1944,31 @@ void __hpt_do_ioctl(PVBUS_EXT vbus_ext, IOCTL_ARG *ioctl_args)
 wait:
 	spin_unlock_irqrestore(vbus_ext->lock, flags);
 
-	if (down_trylock(&sem)) {
+	if (down_trylock(&sem_tm.sem)) {
 		timeout = jiffies + 20 * HZ;
-		init_timer(&timer);
-		timer.expires = timeout;
-		timer.data = (HPT_UPTR)&sem;
-		timer.function = hpt_ioctl_timeout;
-		add_timer(&timer);
-		if (down_interruptible(&sem))
-			down(&sem);
-		del_timer(&timer);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		timer_setup_on_stack(&sem_tm.timer, NULL, 0);
+#else 
+		init_timer(&sem_tm.timer);
+		sem_tm.timer.data = (HPT_UPTR)&sem_tm.sem;
+#endif
+		sem_tm.timer.expires = timeout;
+		sem_tm.timer.function = hpt_ioctl_timeout;
+		add_timer(&sem_tm.timer);
+		if (down_interruptible(&sem_tm.sem))
+			down(&sem_tm.sem);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)		
+		del_timer_sync(&sem_tm.timer);
+		destroy_timer_on_stack(&sem_tm.timer);
+#else 
+		del_timer(&sem_tm.timer);
+#endif
 	}
 
 	spin_lock_irqsave(vbus_ext->lock, flags);
 
 	if (ioctl_args->ioctl_cmnd) {
-		sema_init(&sem, 0);
+		sema_init(&sem_tm.sem, 0);
 		ldm_reset_vbus((PVBUS)vbus_ext->vbus);
 		__hpt_do_tasks(vbus_ext);
 		goto wait;
@@ -2347,8 +2405,10 @@ static int hpt_scsi_ioctl(Scsi_Device * dev, int cmd, void *arg)
  */
 static Scsi_Host_Template driver_template = {
 	name:                    driver_name,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
 	detect:                  hpt_detect,
 	release:                 hpt_release,
+#endif
 	queuecommand:            hpt_queuecommand,
 	eh_device_reset_handler: hpt_reset,
 	eh_bus_reset_handler:    hpt_reset,
@@ -2359,7 +2419,9 @@ static Scsi_Host_Template driver_template = {
 	unchecked_isa_dma:       0,
 	emulated:                0,
 	/* ENABLE_CLUSTERING will cause problem when we handle PIO for highmem_io */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 	use_clustering:          DISABLE_CLUSTERING,
+#endif
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0) /* 2.4.x */
 	use_new_eh_code:         1,
 	proc_name:               driver_name,
@@ -2390,60 +2452,266 @@ EXPORT_NO_SYMBOLS;
 
 #else 
 
+static int hpt_init_all(HIM *him, struct pci_dev *dev)
+{
+	PCI_ID pci_id;
+	PHBA hba = NULL;
+	PVBUS vbus;
+	PVBUS_EXT vbus_ext;
+	int count = -1;
+	HPT_U8 reached = 0;
+	struct Scsi_Host *host = NULL;
+	spinlock_t initlock;
+
+	ldm_for_each_vbus(vbus, vbus_ext) {
+		hba = vbus_ext->hba_list;
+		if (hba->pcidev == dev) {
+			count = him->get_controller_count(&pci_id, &reached, &hba->pciaddr);
+			break;
+		}
+	}
+
+	HPT_ASSERT(count >= reached);
+
+	if (reached && (count == reached) ) {
+		if (hpt_alloc_mem(vbus_ext)) {
+			OsPrint(("failed to allocate memory"));
+			goto freeresource;
+		}
+
+		spin_unlock_irq_io_request_lock;
+		spin_lock_init(&initlock);
+		vbus_ext->lock = &initlock;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+		timer_setup(&vbus_ext->timer, NULL, 0);
+#else 
+		init_timer(&vbus_ext->timer);
+#endif
+		for (hba = vbus_ext->hba_list; hba; hba = hba->next) {
+			if (!hba->ldm_adapter.him->initialize(hba->ldm_adapter.him_handle)) {
+				os_printk("fail to initialize hardware");
+				goto freemem;
+			}
+		}
+
+		sema_init(&vbus_ext->sem, 0);
+		spin_lock_irq(&initlock);
+		ldm_initialize_vbus_async(vbus,
+					  &vbus_ext->hba_list->ldm_adapter,
+					  ldm_initialize_vbus_done);
+		spin_unlock_irq(&initlock);
+
+		if (down_interruptible(&vbus_ext->sem)) {
+			os_printk("init interrupted");
+			/*need delete time as some timers maybe running*/
+			del_timer_sync(&vbus_ext->timer);
+			goto freeirq;
+		}
+
+		spin_lock_irq(&initlock);
+		ldm_set_autorebuild(vbus, autorebuild);
+		spin_unlock_irq(&initlock);
+
+		host = scsi_host_alloc(&driver_template, sizeof(void *));
+		if (!host) {
+			os_printk("scsi_register failed");
+			goto freeirq;
+		}
+
+		get_vbus_ext(host) = vbus_ext;
+		vbus_ext->host = host;
+		set_vbus_lock(vbus_ext);
+
+		pci_set_drvdata(dev, host);
+
+#ifdef CONFIG_SCSI_PROC_FS
+		host->max_id = osm_max_targets;
+#else 
+		host->max_id = osm_max_targets + 1;
+#endif
+		host->max_lun = 128;
+		host->max_channel = 0;
+		scsi_set_max_cmd_len(host, 16);
+
+		for (hba = vbus_ext->hba_list; hba; hba = hba->next) {
+			if (request_irq(hba->pcidev->irq,
+					hpt_intr, HPT_SA_SHIRQ, driver_name, hba)<0) {
+				os_printk("Error requesting");
+				goto freeirq;
+			}
+			hba->ldm_adapter.him->intr_control(hba->ldm_adapter.him_handle, HPT_TRUE);
+			hba->flags |= HBA_FLAG_IRQ_INSTALLED;
+		}
+
+		host->irq = vbus_ext->hba_list->pcidev->irq;
+
+		tasklet_init(&vbus_ext->worker,
+			     (void (*)(unsigned long))hpt_do_tasks, (HPT_UPTR)vbus_ext);
+		if (vbus_ext->tasks)
+			tasklet_schedule(&vbus_ext->worker);
+
+		if (scsi_add_host(host, &dev->dev)) {
+			printk(KERN_ERR "scsi%d: scsi_add_host failed\n",
+			       host->host_no);
+			goto freeirq;
+		}
+
+		scsi_scan_host(host);
+	}
+
+	return 0;
+
+freeirq:
+	for (hba = vbus_ext->hba_list; hba; hba = hba->next) {
+		if (hba->flags & HBA_FLAG_IRQ_INSTALLED) {
+			hba->flags &= ~HBA_FLAG_IRQ_INSTALLED;
+			free_irq(hba->pcidev->irq, hba);
+		}
+	}
+
+freemem:
+	hpt_free_mem(vbus_ext);
+
+freeresource:
+	for (hba = vbus_ext->hba_list; hba; hba = hba->next) {
+		
+		pci_release_regions(hba->pcidev);
+		pci_disable_device(hba->pcidev);
+		kfree(hba);
+	}
+	
+	return -1;
+}
+
+static int hpt_probe(struct pci_dev *dev, const struct pci_device_id *id)
+{
+	HIM *him;
+	int i;
+	PCI_ID pci_id;
+
+	for (him = him_list; him; him = him->next) {
+		for (i=0; him->get_supported_device_id(i, &pci_id); i++) {
+			if (him->get_controller_count)
+				him->get_controller_count(&pci_id, 0, 0);
+			if (pci_id.did == id->device) {
+				if (hpt_init_one(him, dev)) {
+					return -1;
+				}
+				return hpt_init_all(him, dev);
+			}
+		}
+	}
+
+	return -1;
+
+}
+
+static void hpt_remove(struct pci_dev *dev)
+{
+	PVBUS_EXT vbus_ext;
+	PVBUS vbus;
+	PHBA hba, thishba, prevhba;
+	unsigned long flags;
+	int i;
+	struct Scsi_Host *host = NULL;
+
+	ldm_for_each_vbus(vbus, vbus_ext) {
+		prevhba = NULL;
+		thishba = NULL;
+		for (hba = vbus_ext->hba_list; hba; prevhba = hba, hba = hba->next) {
+			if (hba->pcidev == dev) {
+				thishba = hba;
+				host = pci_get_drvdata(vbus_ext->hba_list->pcidev);
+				goto found;
+			}
+		}
+	}
+
+	HPT_ASSERT(0);
+	return;
+found:
+
+	if (host) {
+		/* stop all ctl tasks and disable the worker tasklet */
+		hpt_stop_tasks(vbus_ext);
+		tasklet_kill(&vbus_ext->worker);
+		vbus_ext->worker.func = 0;
+
+		scsi_remove_host(host);
+
+		/* flush devices */
+		for (i=0; i<osm_max_targets; i++) {
+			PVDEV vd = ldm_find_target(vbus, i);
+			if (vd) {
+				/* retry once */
+				if (hpt_flush_vdev(vbus_ext, vd))
+					hpt_flush_vdev(vbus_ext, vd);
+			}
+		}
+
+		spin_lock_irqsave(vbus_ext->lock, flags);
+
+		del_timer_sync(&vbus_ext->timer);
+		ldm_shutdown(vbus);
+
+		spin_unlock_irqrestore(vbus_ext->lock, flags);
+
+		scsi_host_put(host);
+
+		pci_set_drvdata(vbus_ext->hba_list->pcidev, NULL);
+	}
+
+	if (vbus_ext->host) {
+		free_irq(dev->irq, hba);
+	}
+
+	kfree(hba);
+	/*if ((vbus_ext->hba_list == NULL) && vbus_ext->host)*/ { /* ALL REMOVED */
+		ldm_release_vbus(vbus);
+
+		free_pages((unsigned long)vbus_ext, vbus_ext->mem_order);
+		hpt_free_mem(vbus_ext);
+	}
+
+	pci_release_regions(dev);
+	pci_disable_device(dev);
+}
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,12))
+static void hpt_shutdown(struct pci_dev *dev)
+{
+	/* TODO: shutdown only flush device and disable IRQ */
+	hpt_remove(dev);
+}
+#endif
+
+static const struct pci_device_id hpt_pci_tbl[] = {
+	{PCI_DEVICE(0x1103, 0x2680), 0, 0, 0},
+	{}
+};
+static struct pci_driver hpt_pci_driver = {
+	.name     = driver_name,
+	.id_table = hpt_pci_tbl,
+	.probe    = hpt_probe,
+	.remove   = hpt_remove,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,12))
+	.shutdown = hpt_shutdown,
+#endif
+};
+
 /* scsi_module.c is deprecated in kernel 2.6 */
 static int __init init_this_scsi_driver(void)
 {
-	struct scsi_host_template *sht = &driver_template;
-	struct Scsi_Host *shost;
-	struct list_head *l;
-	int error;
+	os_printk("%s %s", driver_name_long, driver_ver);
 
-	if (!sht->release) {
-		printk(KERN_ERR
-			"scsi HBA driver %s didn't set a release method.\n",
-			sht->name);
-		return -EINVAL;
-	}
+	init_config();
 
-	sht->module = THIS_MODULE;
-	INIT_LIST_HEAD(&sht->legacy_hosts);
-
-	sht->detect(sht);
-	if (list_empty(&sht->legacy_hosts))
-		return -ENODEV;
-
-	list_for_each_entry(shost, &sht->legacy_hosts, sht_legacy_list) {
-		error = scsi_add_host(shost, &get_vbus_ext(shost)->hba_list->pcidev->dev);
-		if (error)
-			goto fail;
-		scsi_scan_host(shost);
-	}
-	return 0;
- fail:
-	l = &shost->sht_legacy_list;
-	while ((l = l->prev) != &sht->legacy_hosts)
-		scsi_remove_host(list_entry(l, struct Scsi_Host, sht_legacy_list));
-	return error;
+	return pci_register_driver(&hpt_pci_driver);
 }
 
 static void __exit exit_this_scsi_driver(void)
 {
-	struct scsi_host_template *sht = &driver_template;
-	struct Scsi_Host *shost, *s;
-
-	list_for_each_entry(shost, &sht->legacy_hosts, sht_legacy_list)
-		scsi_remove_host(shost);
-	list_for_each_entry_safe(shost, s, &sht->legacy_hosts, sht_legacy_list)
-		sht->release(shost);
-
-	if (list_empty(&sht->legacy_hosts))
-		return;
-
-	printk(KERN_WARNING "%s did not call scsi_unregister\n", sht->name);
-	dump_stack();
-
-	list_for_each_entry_safe(shost, s, &sht->legacy_hosts, sht_legacy_list)
-		scsi_unregister(shost);
+	pci_unregister_driver(&hpt_pci_driver);
 }
 
 module_init(init_this_scsi_driver);

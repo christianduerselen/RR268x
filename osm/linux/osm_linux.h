@@ -207,7 +207,9 @@ typedef void irqreturn_t;
 #define HPT_SG_PAGE(sg)		(sg)->page
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,21)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+#define HPT_FIND_SLOT_DEVICE(bus, devfn) pci_get_domain_bus_and_slot(0, bus, devfn)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,21)
 #define HPT_FIND_SLOT_DEVICE pci_get_bus_and_slot
 #else 
 #define HPT_FIND_SLOT_DEVICE pci_find_slot
@@ -242,8 +244,11 @@ extern int  osm_max_targets;
 #define EXT_TYPE_HBA  1
 #define EXT_TYPE_VBUS 2
 
+#define HBA_FLAG_IRQ_INSTALLED 0x1
+
 typedef struct _hba {
 	int ext_type;
+	int flags;
 	LDM_ADAPTER ldm_adapter;
 	PCI_ADDRESS pciaddr;
 	struct pci_dev *pcidev;
@@ -278,12 +283,17 @@ typedef struct _vbus_ext {
 	
 	HPT_U8 *sd_flags;
 	int needs_refresh;
+	int mem_order;
 	
 	/* the LDM vbus instance continues */
 	unsigned long vbus[0] __attribute__((aligned(sizeof(unsigned long))));
 }
 VBUS_EXT, *PVBUS_EXT;
 
+typedef struct _sem_timer {
+	struct timer_list timer;
+	struct semaphore sem;
+}SEM_TIMER, *PSEM_TIMER;
 
 typedef struct _ioctl_cmd {
 	IOCTL_ARG ioctl_args;

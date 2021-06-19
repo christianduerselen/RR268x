@@ -28,9 +28,9 @@ int  osm_max_targets = 32;
 int os_max_cache_size = 0x2000000;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
-static const struct pci_device_id hpt_pci_tbl[] = {
+static const struct pci_device_id hpt_pci_tbl2[] = {
 	{PCI_DEVICE(0x1103, 0x2680), 0, 0, 0},
 	{}
 };
-MODULE_DEVICE_TABLE(pci, hpt_pci_tbl);
+MODULE_DEVICE_TABLE(pci, hpt_pci_tbl2);
 #endif
