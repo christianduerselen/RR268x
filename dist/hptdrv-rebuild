@@ -15,6 +15,9 @@ if test "${kernels}" = ""; then
   exit 0
 fi
 
+FORCE=1
+export FORCE
+
 rm -f "${logfile}"
 logecho "Rebuild HighPoint driver"
 compile
@@ -27,8 +30,6 @@ if test "$rtrn" != "0"; then
     rtrn=$?
   fi
 fi
-
-fixmodload
 fixboot
 
 # vim: expandtab ts=2 sw=2 ai

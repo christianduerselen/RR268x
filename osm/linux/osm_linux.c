@@ -1725,6 +1725,9 @@ static void hpt_cleanup(PVBUS_EXT vbus_ext)
 
 	ldm_release_vbus(vbus);
 
+	pci_release_regions(vbus_ext->hba_list->pcidev);
+	pci_disable_device(vbus_ext->hba_list->pcidev);
+
 	hpt_free_mem(vbus_ext);
 
 	while ((hba=vbus_ext->hba_list)) {
@@ -2671,7 +2674,7 @@ found:
 
 	kfree(hba);
 	/*if ((vbus_ext->hba_list == NULL) && vbus_ext->host)*/ { /* ALL REMOVED */
-		ldm_release_vbus(vbus);
+		/*ldm_release_vbus(vbus);*/
 
 		free_pages((unsigned long)vbus_ext, vbus_ext->mem_order);
 		hpt_free_mem(vbus_ext);

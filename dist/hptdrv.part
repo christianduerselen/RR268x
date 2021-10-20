@@ -1,0 +1,6 @@
+# Added from hptdrv.part when install rr2680
+if grep rr2680 /lib/modules/`uname -r`/modules.dep -s -q; then
+    echo "Loading driver rr2680"
+    modprobe rr2680 2> /dev/null
+fi # rr2680 # mark to delete driver entry
+

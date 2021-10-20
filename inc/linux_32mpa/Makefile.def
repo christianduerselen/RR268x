@@ -1,6 +1,7 @@
+# $Id: Makefile.def,v 1.29 2010/03/30 09:05:55 wsw Exp $
 #
 # Default makefile for Linux driver
-# Copyright (C) 2004-2005 HighPoint Technologies, Inc. All Rights Reserved.
+# Copyright (C) 2004-2011 HighPoint Technologies, Inc. All Rights Reserved.
 # History:
 #   2004-12-14 gmm initial code
 #
@@ -80,6 +81,10 @@ elif test -f $(KERNELDIR)/include/generated/uapi/linux/version.h; then \
     echo $(KERNELDIR)/include/generated/uapi/linux/version.h; \
 fi")
 
+ifeq ($(VERSION_H),)
+$(error Can not find version.h header. Check kernel dir KERNELDIR $(KERNELDIR).)
+endif
+
 MAJOR := $(shell expr `grep LINUX_VERSION_CODE $(VERSION_H) | cut -d\  -f3` / 65536 % 65536)
 MINOR := $(shell expr `grep LINUX_VERSION_CODE $(VERSION_H) | cut -d\  -f3` / 256 % 256)
 KERNEL_VER := $(MAJOR).$(MINOR)
@@ -88,24 +93,14 @@ ifeq ($(KERNEL_VER),)
 $(error Cannot find kernel version. Check $(KERNELDIR)/include/linux/version.h.)
 endif
 
-ifneq ($(MAJOR), 5)
-ifneq ($(MAJOR), 4)
-ifneq ($(MAJOR), 3)
-ifneq ($(KERNEL_VER), 2.6)
-ifneq ($(KERNEL_VER), 2.4)
-$(error Only kernel 2.4/2.6/3.x/4.x/5.x is supported but you use $(KERNEL_VER))
+ifeq ($(KERNEL_VER), 2.4)
+$(error Unsupported kernel $(KERNEL_VER))
 endif
-endif
-endif
-endif
-endif
-
-ifneq ($(KERNEL_VER), 2.4)
 
 TARGET := $(TARGETNAME).ko
 
 $(TARGETNAME).ko: $(CURDIR)/.build/Makefile
-	@$(MAKE) -C $(KERNELDIR) M=$(CURDIR)/.build modules
+	@$(MAKE) -C $(KERNELDIR) KBUILD_EXTMOD=$(CURDIR)/.build modules
 	@cp -f $(CURDIR)/.build/$(TARGETNAME).ko $(CURDIR)/
 
 .PHONY: $(CURDIR)/.build/Makefile
@@ -132,23 +127,8 @@ $(CURDIR)/.build/Makefile:
 	@echo >>$@
 	@echo '$$(addprefix $$(obj)/,$$(TARGETMODS)): $$(obj)/%.o: $$(HPT_LIB)/%.o' >>$@
 	@echo '	@cp -f $$< $$@' >>$@
-
-else # for kernel 2.4 modules
-
-HPT_LIB := $(HPT_LIB)-regparm0
-_TARGETMODS := $(addprefix $(HPT_LIB)/,$(TARGETMODS))
-
-VPATH := .. $(HPT_ROOT)/osm/linux
-TARGET := $(TARGETNAME).o
-
-C_INCLUDES += -I$(HPT_ROOT)/osm/linux -I$(KERNELDIR)/include -I$(KERNELDIR)/drivers/scsi
-
-$(TARGET): $(TARGETOBJS) $(_TARGETMODS)
-	@echo $(if $V,,[LD] $@)
-	$(if $V,,@)$(CROSS_COMPILE)$(LD) -r -o $@ $^
-
-endif # KERNEL_VER
-
+	@echo '	@touch $$(shell dirname $$@)/.$$(shell basename $$@).cmd' >>$@
+	
 endif # KMOD
 
 wrong_target:

@@ -14,9 +14,10 @@ fi
 
 logfile=/var/log/hptdrv-cron.log
 
-rm -f ${logfile}
+#rm -f ${logfile}
 
 update
+
 exit $?
 
 # vim: expandtab ts=2 sw=2 ai

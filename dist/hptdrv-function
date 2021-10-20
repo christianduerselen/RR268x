@@ -1,38 +1,25 @@
 #!/bin/bash
 
-pidfile=/var/run/yum.pid
 drvroot=/usr/share/hptdrv
-
-zypperoption="--disable-system-resolvables"
 
 getmodules()
 {
-  local mods=""
   if test "${modules}" != ""; then
     #echo "Specify module to monitor: ${modules}" > /dev/stderr
     for mod in ${modules}; do
       mod=$(basename "${mod}")
       if test -d "${drvroot}/${mod}"; then
-	if test "${mods}" = ""; then
-          mods="${mod}"
-	else
-          mods="${mods} ${mod}"
-	fi
+        echo "${mod}"
       fi
     done
   else
     for mod in $(ls "${drvroot}"); do
       mod=$(basename "${mod}")
       if test -d "${drvroot}/${mod}"; then
-	if test "${mods}" = ""; then
-          mods="${mod}"
-	else
-          mods="${mods} ${mod}"
-	fi
+        echo "${mod}"
       fi
     done
   fi
-  echo "${mods}"
 }
 
 #modules=`getmodules`
@@ -42,8 +29,7 @@ getmodules()
 
 date=`date +%Y%m%d%H%M%S`
 temp=/var/tmp
-host=www.highpoint-tech.com
-webroot=http://${host}/linux
+cache=/var/cache/hptdrv/
 
 logfile=/var/log/hptdrv.log
 lock=/var/lib/hptdrv-monitor
@@ -118,9 +104,9 @@ kernelver()
   kerverfrommagic=`echo $1 | xargs file -b | sed s'#.*version \+\([^ ]*\) .*#\1#'`
 
   kerver=""
-  if ( echo "$kerverfrommagic" | grep -s -q -e ^'2\.6\.[0-9]' -e ^'3\.[0-9]' ); then
+  if ( echo "$kerverfrommagic" | grep -s -q -e ^'2\.6\.[0-9]' -e ^'3\.[0-9]' -e ^'4\.[0-9]' -e ^'5\.[0-9]' -e ^'6\.[0-9]' ); then
     kerver=$kerverfrommagic
-  elif ( echo "$kerverfromname" | grep -s -q -e ^'2\.6\.[0-9]' -e ^'3\.[0-9]' ); then
+  elif ( echo "$kerverfromname" | grep -s -q -e ^'2\.6\.[0-9]' -e ^'3\.[0-9]' -e ^'4\.[0-9]' -e ^'5\.[0-9]' -e ^'6\.[0-9]' ); then
     kerver=$kerverfromname
   fi
   logecho "kernelver:kernel ${1}"
@@ -139,7 +125,7 @@ systemkernels()
     default="/boot/vmlinuz-unknown-kernel"
   fi
   # do not add rescue kernel to the kernel list, fedora system.
-  local kernels=$( ls -tr /boot/vmlinuz-* 2>/dev/null | grep -v "${default}" | grep -v rescue )
+  local kernels=$( ls -tr /boot/vmlinuz-* 2>/dev/null | grep -v "${default}" | grep -v rescue | grep -v \\.old$ )
   if test -e "$default"; then
     if test "${kernels}" = ""; then
       kernels="$default"
@@ -182,7 +168,7 @@ checkyum()
       if test "${c}" = "q"; then
         return 1
       fi
-      let i=$i+1
+      i=$(expr $i + 1)
     done
   fi
   return 0
@@ -213,38 +199,27 @@ checkapt()
 
 checkzypper()
 {
-  #version=`zypper --version`
-  #if echo $version | grep 1.8.11 -s -q; then
-  #  zypperoption="--disable-system-resolvables"
-  #else
-  #  zypperoption=""
-  #fi
-  zypper -q -n ll >/dev/null 2>&1
-  if test $? = 4; then
-    echo "Failed to check zypper status."
-    return 1
-  elif test $? = 7; then
+  version=`zypper --version`
+  if echo $version | grep 1.8.11 -s -q; then
+    zypperoption="--disable-system-resolvables"
+  else
+    zypperoption=""
+  fi
+  zypper ll >/dev/null 2>&1
+  if test $? = 7; then
     if test "$1" = "check"; then
       echo "Zypper is being used: enter 'q' to exit the kernel-devel list."
     else
       echo "Zypper is being used: enter 'q' to exit the $1 installation."
     fi
-    zypper -q -n ll >/dev/null 2>&1
-    if test $? = 4; then
-      echo "Failed to check zypper status."
-      return 1
-    fi
+    zypper ll >/dev/null 2>&1
     while test $? = 7; do
       echo -n .
       read -t 1 c
       if test "${c}" = "q"; then
         return 1
       fi
-      zypper -q -n ll >/dev/null 2>&1
-      if test $? = 4; then
-        echo "Failed to check zypper status."
-        return 1
-      fi
+      zypper ll >/dev/null 2>&1
     done
   fi
   return 0
@@ -252,132 +227,82 @@ checkzypper()
 
 fixzypper()
 {
-#  version=`zypper --version`
-#  if echo $version | grep 1.8.11 -s -q; then
-#    zypper --disable-system-resolvables --non-interactive install --auto-agree-with-licenses zypper >>$logfile 2>&1
-#    version=`zypper --version`
-#    if echo $version | grep 1.8.11 -s -q; then
-#      zypperoption="--disable-system-resolvables"
-#    else
-#      zypperoption=""
-#    fi
-#  elif echo $version | grep 1.7.3 -s -q; then
-#    zypperoption="--disable-system-resolvables"
-#    # suse 12.2 zypper failed or tooooo long to zypper pa
-#    zypper --disable-system-resolvables --non-interactive install --auto-agree-with-licenses zypper >>$logfile 2>&1
-#    version=`zypper --version`
-#    if echo $version | grep 1.7.3 -s -q; then
-#      zypperoption="--disable-system-resolvables"
-#    else
-#      zypperoption=""
-#    fi
-#  fi
-  :
+  version=`zypper --version`
+  if echo $version | grep 1.8.11 -s -q; then
+    zypper --disable-system-resolvables --non-interactive install zypper >>$logfile 2>&1
+    version=`zypper --version`
+    if echo $version | grep 1.8.11 -s -q; then
+      zypperoption="--disable-system-resolvables"
+    else
+      zypperoption=""
+    fi
+  fi
 }
 
 installtool_centos()
 {
   checkyum $1
-  if test $? = 1; then
-    echo "Cancel $1 installation."
-  else
-    logecho "installtool_centos $1"
-    echo -n "Installing program $1 ... " > /dev/stderr
-    yum -y --quiet install ${1} >>$logfile 2>&1
-    if ! type $1 >/dev/null 2>&1; then
-      echo "failed" > /dev/stderr
-    else
-      echo "done" > /dev/stderr
-    fi
-  fi
+  logecho "installtool_centos $1"
+  echo -n "Installing program $1 ... " > /dev/stderr
+  yum -y --quiet install ${1} >>$logfile 2>&1
+  #echo "done" > /dev/stderr
 }
 
 installtool_fedora()
 {
   checkyum $1
-  if test $? = 1; then
-    echo "Cancel $1 installation."
-  else
-    logecho "installtool_fedora $1"
-    echo -n "Installing program $1 ... " > /dev/stderr
-    yum -y --quiet install ${1} >>$logfile 2>&1
-    if ! type $1 >/dev/null 2>&1; then
-      echo "failed" > /dev/stderr
-    else
-      echo "done" > /dev/stderr
-    fi
-  fi
+  logecho "installtool_fedora $1"
+  echo -n "Installing program $1 ... " > /dev/stderr
+  yum -y --quiet install ${1} >>$logfile 2>&1
+  #echo "done" > /dev/stderr
 }
 
 installtool_redhat()
 {
   checkyum $1
-  if test $? = 1; then
-    echo "Cancel $1 installation."
-  else
-    logecho "installtool_redhat $1"
-    echo -n "Installing program $1 ... " > /dev/stderr
-    yum -y --quiet install ${1} >>$logfile 2>&1
-    if ! type $1 >/dev/null 2>&1; then
-      echo "failed" > /dev/stderr
-    else
-      echo "done" > /dev/stderr
-    fi
-  fi
+  logecho "installtool_redhat $1"
+  echo -n "Installing program $1 ... " > /dev/stderr
+  yum -y --quiet install ${1} >>$logfile 2>&1
+  #echo "done" > /dev/stderr
 }
 
 installtool_ubuntu()
 {
   checkapt $1
-  if test $? = 1; then
-    echo "Cancel $1 installation."
+  logecho "installtool_ubuntu $1"
+  dpkg --configure -a
+  echo -n "Installing program $1 ... " > /dev/stderr
+  if apt-get --print-uris install ${1} | grep 'cdrom:' -s -q; then
+    echo > /dev/stderr
+    apt-get -y -qq install ${1}
   else
-    logecho "installtool_ubuntu $1"
-    dpkg --configure -a
-    echo -n "Installing program $1 ... " > /dev/stderr
     apt-get -y -qq install ${1} >>$logfile 2>&1
-    if ! type $1 >/dev/null 2>&1; then
-      echo "failed" > /dev/stderr
-    else
-      echo "done" > /dev/stderr
-    fi
   fi
+  #echo "done" > /dev/stderr
 }
 
 installtool_debian()
 {
   checkapt $1
-  if test $? = 1; then
-    echo "Cancel $1 installation."
+  logecho "installtool_debian $1"
+  dpkg --configure -a
+  echo -n "Installing program $1 ... " > /dev/stderr
+  if apt-get --print-uris install ${1} | grep 'cdrom:' -s -q; then
+    echo > /dev/stderr
+    apt-get -y -qq install ${1}
   else
-    logecho "installtool_debian $1"
-    dpkg --configure -a
-    echo -n "Installing program $1 ... " > /dev/stderr
     apt-get -y -qq install ${1} >>$logfile 2>&1
-    if ! type $1 >/dev/null 2>&1; then
-      echo "failed" > /dev/stderr
-    else
-      echo "done" > /dev/stderr
-    fi
   fi
 }
 
 installtool_suse()
 {
   checkzypper $1
-  if test $? = 1; then
-    echo "Cancel $1 installation."
-  else
-    fixzypper
-    logecho "installtool_suse $1 $zypperoption"
-    echo -n "Installing program $1 ... " > /dev/stderr
-    zypper $zypperoption --non-interactive install ${1} >>$logfile 2>&1
-    if ! type $1 >/dev/null 2>&1; then
-      echo "failed" > /dev/stderr
-    else
-      echo "done" > /dev/stderr
-    fi
-  fi
+  fixzypper
+  logecho "installtool_suse $1"
+  echo -n "Installing program $1 ... " > /dev/stderr
+  zypper $zypperoption --non-interactive install ${1} >>$logfile 2>&1
+  #echo "done" > /dev/stderr
 }
 
 installtool()
@@ -387,9 +312,115 @@ installtool()
   # centos/suse debian/ubuntu rhel/fedora
   if type -a installtool_${dist} >/dev/null 2>&1; then
     installtool_${dist} $1
+    if type $1 > /dev/null 2>&1; then
+      echo "done"
+    else
+      echo "(failed)"
+    fi
   else
     echo "unknown how to install."
   fi
+}
+
+installlib_centos()
+{
+  checkyum $1
+  logecho "installlib_centos $1"
+  msg=`rpm -qa $1`
+  if [ "$msg" == "" ]; then
+    yum -y --quiet install ${1} >>$logfile 2>&1
+    msg=`rpm -qa $1`
+    if [ "$msg" == "" ]; then
+      echo "(failed)" > /dev/stderr
+      return 1
+    fi
+    echo done > /dev/stderr
+  else
+    echo "($msg)"
+  fi
+  return 0
+}
+
+installlib_fedora()
+{
+  checkyum $1
+  logecho "installlib_fedora $1"
+  msg=`rpm -qa $1`
+  if [ "$msg" == "" ]; then
+    yum -y --quiet install ${1} >>$logfile 2>&1
+    msg=`rpm -qa $1`
+    if [ "$msg" == "" ]; then
+      echo "(failed)" > /dev/stderr
+      return 1
+    fi
+    echo done > /dev/stderr
+  else
+    echo "($msg)"
+  fi
+  return 0
+}
+
+installlib_redhat()
+{
+  checkyum $1
+  logecho "installlib_redhat $1"
+  msg=`rpm -qa $1`
+  if [ "$msg" == "" ]; then
+    yum -y --quiet install ${1} >>$logfile 2>&1
+    msg=`rpm -qa $1`
+    if [ "$msg" == "" ]; then
+      echo "(failed)" > /dev/stderr
+      return 1
+    fi
+    echo done > /dev/stderr
+  else
+    echo "($msg)"
+  fi
+  return 0
+}
+
+installlib_ubuntu()
+{
+  checkapt $1
+  logecho "installlib_ubuntu $1"
+  dpkg --configure -a
+  if apt-get --print-uris install ${1} | grep 'cdrom:' -s -q; then
+    echo > /dev/stderr
+    apt-get -y -qq install ${1}
+  else
+    apt-get -y -qq install ${1} >>$logfile 2>&1
+  fi
+  #echo "done" > /dev/stderr
+}
+
+installlib_debian()
+{
+  checkapt $1
+  logecho "installlib_debian $1"
+  dpkg --configure -a
+  if apt-get --print-uris install ${1} | grep 'cdrom:' -s -q; then
+    echo > /dev/stderr
+    apt-get -y -qq install ${1}
+  else
+    apt-get -y -qq install ${1} >>$logfile 2>&1
+  fi
+  #echo "done" > /dev/stderr
+}
+
+installlib_suse()
+{
+  checkzypper $1
+  fixzypper
+  logecho "installlib_suse $1"
+  echo -n "Installing library $1 ... " > /dev/stderr
+  zypper $zypperoption --non-interactive install ${1} >>$logfile 2>&1
+  #echo "done" > /dev/stderr
+}
+
+installlib()
+{
+  echo -n "Installing library $1 ... " > /dev/stderr
+  installlib_${dist} $1
 }
 
 checkpkg()
@@ -408,10 +439,10 @@ installkerndev_centos()
   checkyum $1
   if test -f /boot/vmlinuz-$1; then
     local kernelrpm=`rpm -qf /boot/vmlinuz-$1 2>/dev/null`
-    if test $kernelrpm != ""; then
+    if test "$kernelrpm" != ""; then
       local develrpm=`rpm -q $kernelrpm --queryformat %{NAME}-devel-%{VERSION}-%{RELEASE}`
       logecho "installkerndev:install package $develrpm"
-      yum -y --quiet install $develrpm >>$logfile 2>&1
+      yum -y --quiet install ${develrpm/-core/} >>$logfile 2>&1
     fi
   fi
   #yum -y --quiet install kernel-devel-$1 >>$logfile 2>&1
@@ -423,10 +454,10 @@ installkerndev_redhat()
   checkyum $1
   if test -f /boot/vmlinuz-$1; then
     local kernelrpm=`rpm -qf /boot/vmlinuz-$1 2>/dev/null`
-    if test $kernelrpm != ""; then
+    if test "$kernelrpm" != ""; then
       local develrpm=`rpm -q $kernelrpm --queryformat %{NAME}-devel-%{VERSION}-%{RELEASE}`
       logecho "installkerndev:install package $develrpm"
-      yum -y --quiet install $develrpm >>$logfile 2>&1
+      yum -y --quiet install ${develrpm/-core/} >>$logfile 2>&1
     fi
   fi
   #yum -y --quiet install kernel-devel-$1 >>$logfile 2>&1
@@ -438,10 +469,10 @@ installkerndev_fedora()
   checkyum $1
   if test -f /boot/vmlinuz-$1; then
     local kernelrpm=`rpm -qf /boot/vmlinuz-$1 2>/dev/null`
-    if test $kernelrpm != ""; then
+    if test "$kernelrpm" != ""; then
       local develrpm=`rpm -q $kernelrpm --queryformat %{NAME}-devel-%{VERSION}-%{RELEASE}`
       logecho "installkerndev:install package $develrpm"
-      yum -y --quiet install $develrpm >>$logfile 2>&1
+      yum -y --quiet install ${develrpm/-core/} >>$logfile 2>&1
     fi
   fi
   #yum -y --quiet install kernel-devel-$1 >>$logfile 2>&1
@@ -453,9 +484,8 @@ installkerndev_suse()
   checkzypper $1
   if test -f /boot/vmlinuz-$1; then
     local kernelrpm=`rpm -qf /boot/vmlinuz-$1 2>/dev/null`
-    if test $kernelrpm != ""; then
+    if test "$kernelrpm" != ""; then
       local develrpm=`rpm -q $kernelrpm --queryformat '%{NAME}-devel=%{VERSION}-%{RELEASE}'`
-      develrpm=${develrpm/-base-/-}
       logecho "installkerndev:install package $develrpm"
       zypper $zypperoption --non-interactive install $develrpm >>$logfile 2>&1
     fi
@@ -471,7 +501,12 @@ installkerndev_ubuntu()
   checkapt $1
   dpkg --configure -a
   echo -n "Installing linux-headers-$1 ... " > /dev/stderr
-  apt-get -y -qq install linux-headers-$1 >>$logfile 2>&1
+  if apt-get --print-uris install linux-headers-$1 | grep 'cdrom:' -s -q; then
+    echo > /dev/stderr
+    apt-get -y -qq install linux-headers-$1
+  else
+    apt-get -y -qq install linux-headers-$1 >>$logfile 2>&1
+  fi
   echo "done" > /dev/stderr
 }
 
@@ -481,7 +516,12 @@ installkerndev_debian()
   checkapt $1
   dpkg --configure -a
   echo -n "Installing linux-headers-$1 ... " > /dev/stderr
-  apt-get -y -qq install linux-headers-$1 >>$logfile 2>&1
+  if apt-get --print-uris install linux-headers-$1 | grep 'cdrom:' -s -q; then
+    echo > /dev/stderr
+    apt-get -y -qq install linux-headers-$1
+  else
+    apt-get -y -qq install linux-headers-$1 >>$logfile 2>&1
+  fi
   echo "done" > /dev/stderr
 }
 
@@ -512,6 +552,20 @@ checktool()
   if ! type wget >/dev/null 2>&1; then
     autoup=0
   fi
+
+  case "$dist" in
+  fedora )
+    installlib elfutils-libelf-devel
+    ;;
+  centos )
+    installlib elfutils-libelf-devel
+    ;;
+  redhat )
+    installlib elfutils-libelf-devel
+    ;;
+  *)
+    ;;
+  esac
 }
 
 getdriverviaid()
@@ -548,6 +602,12 @@ getdriverviaid()
           ;;
         0x750)
           echo r750
+          ;;
+        0x3740|0x840)
+          echo rr3740a
+          ;;
+        0x7110)
+          echo ssd711x
           ;;
         *)
           echo
@@ -658,6 +718,39 @@ gethostdriver()
     done
 
     if test "${bootdev}" = "1"; then
+      if echo $dev | grep -s -q hptblock; then
+        if grep -s -q hptnvme /proc/modules; then
+          for ext in $drivers; do
+            if test "${ext}" = "hptnvme"; then
+              break
+            fi
+          done
+          if test "${ext}" != "hptnvme"; then
+            if test "${drivers}" = ""; then
+              drivers="hptnvme"
+            else
+              drivers="${drivers} hptnvme"
+            fi
+          fi
+        fi
+
+        if grep -s -q rsnvme /proc/modules; then
+          for ext in $drivers; do
+            if test "${ext}" = "rsnvme"; then
+              break
+            fi
+          done
+          if test "${ext}" != "rsnvme"; then
+            if test "${drivers}" = ""; then
+              drivers="rsnvme"
+            else
+              drivers="${drivers} rsnvme"
+            fi
+          fi
+        fi
+
+        continue
+      fi
       driver=$(follow $dev)
       for ext in $drivers; do
         if test "${ext}" = "${driver}"; then
@@ -683,6 +776,11 @@ detectenv()
   curver=$(uname -r)
   logecho "detectenv:current:${curver}"
   logecho "${kernels}"
+  lsinitrd=`type -p lsinitramfs`
+  if test "${lsinitrd}" = ""; then
+    lsinitrd=`type -p lsinitrd`
+  fi
+
   for kernel in ${kernels}; do
     kerver=`kernelver ${kernel}`
     logecho "\`-${kerver}"
@@ -727,9 +825,11 @@ detectenv()
           ;;
       esac
 
-      if test "${compress}" = ""; then
-        logecho "detectenv:unknown compress method."
-        break
+      if test "${lsinitrd}" = ""; then
+        if test "${compress}" = ""; then
+          logecho "detectenv:unknown compress method."
+          break
+        fi
       fi
 
       hostmodules=$(gethostdriver)
@@ -747,6 +847,7 @@ detectenv()
       echo "current=${current}" >> $lock
       echo "compress=${compress}" >> $lock
       echo "initrdtype=${initrdtype}" >> $lock
+      echo "lsinitrd=${lsinitrd}" >> $lock
       break
     fi
   done
@@ -761,20 +862,28 @@ getconflictname()
     echo pata_hpt37x
   elif [ "${modname}" = "rr272x_1x" -o "${modname}" = "rr274x_3x" -o "${modname}" = "rr276x" -o "${modname}" = "rr278x" ]; then
     echo mvsas
+  elif [ "${modname}" = "hptnvme" ]; then
+    echo nvme
+  elif [ "${modname}" = "rsnvme" ]; then
+    echo nvme
   else
     echo there_is_no_conf_mod
   fi
 }
 
-removeconflictmod()
+removeconfmod()
 {
   # name dir
   # remove conflict module
   modname="$1"
   dir=/lib/modules/"$2"/kernel/
-  confmod=$(getconflictname "${modname}")
-  logecho "removeconflictmod: $modname $confmod"
-  find $dir -type f -name "${confmod}".* -delete
+  if [ "${modname}" = "hptmv" -o "${modname}" = "hptmv6"  -o "${modname}" = "rr172x" -o "${modname}" = "rr174x" -o "${modname}" = "rr2310_00" ] ; then
+    find $dir -type f -name sata_mv.* -delete
+  elif [ "$modname" = "hpt374" -o "$modname" = "hpt37x2" ]; then
+    find $dir -type f -name pata_hpt37x.* -delete
+  elif [ "${modname}" = "rr272x_1x" -o "${modname}" = "rr274x_3x" -o "${modname}" = "rr276x" -o "${modname}" = "rr278x" ]; then
+    find $dir -type f -name mvsas.* -delete
+  fi
 }
 
 getbootcfg()
@@ -821,8 +930,9 @@ getdefaultkernel()
       else
         sub=0
       fi
-      let sub=sub+1
-      let no=no+1
+
+      sub=$(expr $sub + 1)
+      no=$(expr $no + 1)
 
       logecho "getdefaultkernel:${no}-${sub}"
 
@@ -837,15 +947,15 @@ getdefaultkernel()
         #logecho "$s $insub $subcount $mainno $subno - $no $sub"
         if sed -n ${s}p ${cfg} | grep -s -q ^[[:space:]]*submenu; then
           insub=1
-          let mainno=mainno+1
+          mainno=$(expr $mainno + 1)
           subno=0
           subcount=0
         elif sed -n ${s}p ${cfg} | grep -s -q ^[[:space:]]*menuentry[[:space:]]; then
           if test $insub -eq 1; then
-            let subno=subno+1
-            let subcount=subcount+1
+            subno=$(expr $subno + 1)
+            subcount=$(expr $subcount + 1)
           else
-            let mainno=mainno+1
+            mainno=$(expr $mainno + 1)
             subno=1
           fi
           if test "${mainno}" = "${no}"; then
@@ -859,7 +969,7 @@ getdefaultkernel()
           fi
         elif sed -n ${s}p ${cfg} | grep -s -q ^[[:space:]]*\}; then
           if test $insub -eq 1; then
-            let subcount=subcount-1
+            subcount=$(expr $subcount - 1)
             if test $subcount -eq -1; then
               insub=0
               subno=0
@@ -879,7 +989,7 @@ getdefaultkernel()
         if test "${j}" = "${no}"; then
           break;
         fi
-        let j=j+1
+        j=$(expr $j + 1)
       done
 
       if test "${j}" = "${no}"; then
@@ -938,15 +1048,15 @@ setdefaultkernel()
         #sed -n ${s}p ${cfg}
         if sed -n ${s}p ${cfg} | grep -s -q ^[[:space:]]*submenu; then
           insub=1
-          let j=j+1
+          j=$(expr $j + 1)
           k=0
           subcount=0
         elif sed -n ${s}p ${cfg} | grep -s -q ^[[:space:]]*menuentry[[:space:]]; then
           if test $insub -eq 1; then
-            let k=k+1
-            let subcount=subcount+1
+            k=$(expr $k + 1)
+            subcount=$(expr $subcount + 1)
           else
-            let j=j+1
+            j=$(expr $j + 1)
           fi
           line=($(sed -n "${s},/}/p" "${cfg}" | grep ^[[:space:]]*linux | tail -1))
           #echo ${line[@]}
@@ -954,9 +1064,9 @@ setdefaultkernel()
           #logecho "setdefaultkernel:i $i j $j ${line[1]}:${line[2]}:${line[3]} ${kernel} ${name} - $lines"
           if test "${kernel}" = "${name}"; then
             #logecho "setdefaultkernel: final no $no j $j k $k subcount $subcount insub $insub $line[1] ${kernel} ${name}"
-            let j=j-1
+            j=$(expr $j - 1)
             if test $insub -eq 1; then
-              let k=k-1
+              k=$(expr $k - 1)
               no="$j>$k"
             else
               no="$j"
@@ -973,7 +1083,7 @@ setdefaultkernel()
           fi
         elif sed -n ${s}p ${cfg} | grep -s -q ^[[:space:]]*\}; then
           if test $insub -eq 1; then
-            let subcount=subcount-1
+            subcount=$(expr $subcount - 1)
             if test $subcount -eq -1; then
               insub=0
               k=0
@@ -1008,7 +1118,7 @@ setdefaultkernel()
         #  no=${j}
         #  break
         #fi
-        let j=j+1
+        j=$(expr $j + 1)
       done
 
       if test "${no}" != ""; then
@@ -1031,16 +1141,10 @@ setdefaultkernel()
 fixmodload()
 {
   if test -f /etc/modprobe.d/unsupported-modules; then
-    sed -i /^allow_unsupported_modules/s/0/1/g \
-      /etc/modprobe.d/unsupported-modules
-  fi
-  if test -f /etc/modprobe.d/10-unsupported-modules.conf; then
-    sed -i /^allow_unsupported_modules/s/0/1/g \
-      /etc/modprobe.d/10-unsupported-modules.conf
+    sed -i /^allow_unsupported_modules/s/0/1/g /etc/modprobe.d/unsupported-modules
   fi
   if test -f /etc/sysconfig/hardware/config; then
-    sed -i /^LOAD_UNSUPPORTED_MODULES_AUTOMATICALLY/s/no/yes/g \
-      /etc/sysconfig/hardware/config
+    sed -i /^LOAD_UNSUPPORTED_MODULES_AUTOMATICALLY/s/no/yes/g /etc/sysconfig/hardware/config
   fi
   #if test -f /etc/initramfs-tools/initramfs.conf; then
   #  if grep ^ROOTDELAY -s -q /etc/initramfs-tools/initramfs.conf; then
@@ -1076,7 +1180,10 @@ fixboot()
   current=""
   initrdtype=""
   compress=""
-
+  lsinitrd=`type -p lsinitramfs`
+  if test "${lsinitrd}" = ""; then
+    lsinitrd=`type -p lsinitrd`
+  fi
   if test -f $lock; then
     logcat "${lock}"
     source $lock
@@ -1085,9 +1192,11 @@ fixboot()
     return
   fi
 
-  if test "$compress" = ""; then
-    logecho "Could not detect compress type of the initrd files."
-    return
+  if test "${lsinitrd}" = ""; then
+    if test "$compress" = ""; then
+      logecho "Could not detect compress type of the initrd files."
+      return
+    fi
   fi
   if test "$initrdtype" = ""; then
     logecho "Could not detect name style of the initrd files."
@@ -1126,8 +1235,10 @@ fixboot()
   logecho "fixboot:host drivers: ${hostdrivers}; modules: ${modules}; builtins: ${builtins}; conflictmods: ${conflictmods}"
   if test "${builtins}" = ""; then
     if test "${conflictmods}" = ""; then
-      logecho "fixboot:no need to fix the booting system"
-      return 0
+      if test "$FORCE" = ""; then
+        logecho "fixboot:no need to fix the booting system"
+        return 0
+      fi
     fi
   fi
 
@@ -1167,14 +1278,83 @@ fixboot()
     esac
 
     if test -f "${initrdfile}"; then
-      initmods=$("${compress}" -dc "${initrdfile}" | cpio -t --quiet 2>/dev/null | grep \\.ko | while read line; do basename $line .ko; done)
+      if test "${lsinitrd}" != ""; then 
+        _initmods=$("$lsinitrd" "${initrdfile}" | grep \.ko$ | rev | cut -d/ -f1 | rev | while read line; do basename $line .ko; done)
+        _initmodsxz=$("$lsinitrd" "${initrdfile}" | grep \.ko.xz$ | rev | cut -d/ -f1 | rev | while read line; do basename $line .ko.xz; done)
+        _initmodsgz=$("$lsinitrd" "${initrdfile}" | grep \.ko.gz$ | rev | cut -d/ -f1 | rev | while read line; do basename $line .ko.gz; done)
+        _initmodsbz2=$("$lsinitrd" "${initrdfile}" | grep \.ko.bz2$ | rev | cut -d/ -f1 | rev | while read line; do basename $line .ko.bz2; done)
+        initmods="${_initmods} ${_initmodsxz} ${_initmodsgz} ${_initmodsbz2}"
+      else
+        initmods=$("${compress}" -dc "${initrdfile}" | cpio -t --quiet 2>/dev/null | grep \\.ko | while read line; do basename $line .ko; done)
+      fi
       initmods=$(echo $initmods)
       logecho "before:$initmods:"
       logecho "${builtins}"
-      if test "${conflictmods}" != ""; then
-        for modname in ${conflictmods}; do
+
+      if [ "$hostdrivers" != "" ]; then
+        addlist="${hostdrivers}"
+      else
+        addlist="ahci"
+      fi
+      dellist=""
+      update=""
+
+      for modname in ${modules}; do
+        conflictmod=$(getconflictname $modname)
+        moreaction=1
+        if test "${conflictmod}" != ""; then
+          for mod in ${initmods}; do
+            if [ "${mod}" == "${modname}" ]; then
+              logecho "fixboot:hptdrv module ${modname} found in the ${initrdfile} for kernel ${kernel} of ${dist}."
+              logecho "fixboot:no need resolve conflict issue for module ${conflictmod}"
+              moreaction=0
+              break
+            fi
+          done
+
+          if [ "$moreaction" == "0" ]; then
+            continue
+          fi
+
+          moreaction=0
+          for mod in ${initmods}; do
+            if [ "${mod}" == "${conflictmod}" ]; then
+              logecho "fixboot:conflict module ${conflictmod} found in the ${initrdfile} for kernel ${kernel} of ${dist}."
+              logecho "fixboot:rebuild to fix conflict issue for module ${modname}"
+              update=2
+              if [ "$hostdrivers" != "" ]; then
+                for mod in ${hostdrivers}; do
+                  if [ "${conflictmod}" == "${mod}" ]; then
+                    #if [ "$addlist" == "" ]; then
+                    #  addlist="${modname} ${conflictmod}"
+                    #else
+                      addlist="${addlist} ${modname} ${conflictmod}"
+                    #fi
+                    moreaction=1
+                    break
+                  fi
+                done
+                if [ "$moreaction" == "0" ]; then
+                  if [ "$dellist" == "" ]; then
+                    dellist="${conflictmod}"
+                  else
+                    dellist="${dellist} ${conflictmod}"
+                  fi
+                fi
+              fi
+              break
+            fi
+          done
+        fi
+      done
+
+      logecho "addlist: ${addlist}"
+      logecho "dellist: ${dellist}"
+
+      if test "$FORCE" = "1"; then
+        for modname in ${modules}; do
           if echo "${initmods}" | grep -w -s -q "${modname}"; then
-            logecho "fixboot:conflict module ${modname} found in the ${initrdfile} for kernel ${kernel} of ${dist}."
+            logecho "fixboot:old module ${modname} found in the ${initrdfile} for kernel ${kernel} of ${dist}."
             update=2
             break
           fi
@@ -1182,7 +1362,11 @@ fixboot()
       fi
       if test "${builtins}" != ""; then
         for modname in ${builtins}; do
-          if echo "${initmods}" | grep -v -w -s -q "${modname}"; then
+          if test "$FORCE" = ""; then
+            logecho "fixboot:module ${modname} is updated forcely in the ${initrdfile} for kernel ${kernel} of ${dist}."
+            update=1
+            break
+          elif echo "${initmods}" | grep -v -w -s -q "${modname}"; then
             logecho "fixboot:module ${modname} is not in the ${initrdfile} for kernel ${kernel} of ${dist}."
             update=1
             break
@@ -1239,7 +1423,11 @@ fixboot()
       # recheck again
       if test "${check}" = "0"; then
         if test -f "${initrdfile}"; then
-          initmods=$("${compress}" -dc "${initrdfile}" | cpio -t --quiet 2>/dev/null | grep \.ko | while read line; do basename $line .ko; done)
+          if test "${lsinitrd}" != ""; then 
+            initmods=$("$lsinitrd" "${initrdfile}" | grep \.ko$ | rev | cut -d/ -f1 | rev | while read line; do basename $line .ko; done)
+          else
+            initmods=$("${compress}" -dc "${initrdfile}" | cpio -t --quiet 2>/dev/null | grep \.ko | while read line; do basename $line .ko; done)
+          fi
           initmods=$(echo $initmods)
           logecho "after:$initmods:"
           for modname in ${builtins}; do
@@ -1277,8 +1465,18 @@ fixboot()
 
         case "${dist}" in
           fedora | redhat | centos )
-            logecho "fixboot(2): ${mkinitrd} ${initrdfile} ${kerver}"
-            ${mkinitrd} "${initrdfile}" "${kerver}"
+            optiona=""
+            arga=""
+            optiond=""
+            argd=""
+            if echo "${mkinitrd}" | grep dracut -s -q; then
+              optiona="--add-drivers"
+              arga="${addlist}"
+              optiond="--omit-drivers"
+              argd="${dellist}"
+            fi
+            logecho "fixboot(2): ${mkinitrd} ${optiond} ${argd} ${optiona} ${arga} ${initrdfile} ${kerver}"
+            ${mkinitrd} ${optiond} "${argd}" ${optiona} "${arga}" "${initrdfile}" "${kerver}"
             ;;
           suse )
             logecho "fixboot(2): ${mkinitrd}"
@@ -1322,18 +1520,24 @@ update()
 {
   local ret=0
 
-  #echo > /dev/tcp/${host}/80
-  #alarm 1 "echo >/dev/tcp/google.com/$port"
-  #ret=$?
-  #if test $ret != "0"; then
-  #  logecho "update:host ${host} could not be reached. Updating failed."
-  #  return 1
-  #fi
+  host=www.highpoint-tech.com
+  hostip=173.231.207.11
+  webroot=https://${host}/linux
 
+  HPTUPDATER=1
+  export HPTUPDATER
+  mkdir -p "$cache"
   rm -rf "${temp}/"hptdrvdl-*
 
+  wget --check-certificate=off --tries=2 --timeout=30 "${webroot}/file" \
+     -O "/dev/null" -o "${temp}/hptdrv-dl.log"
+  ret=$?
+  logcat "${temp}/hptdrv-dl.log"
+  if test "${ret}" != "0"; then
+    webroot=https://${hostip}/linux
+  fi
+
   for modname in ${modules}; do
-    cd /
 
     MAKEFILE=`find "${drvroot}/${modname}/product" -name Makefile | head -1`
     if test "${MAKEFILE}" = ""; then
@@ -1346,78 +1550,59 @@ update()
       tag=std
     fi
 
-    mkdir -p "${temp}/hptdrvdl-${tag}"
-    if test ! -d ${temp}/hptdrvdl-${tag}; then
-      logecho "update:Failed to create directory ${temp}/${temp}/hptdrvdl-${tag}. Updating ${modname} is skipped."
+    mkdir -p "${temp}/hptdrvdl-${modname}-${tag}"
+    if test ! -d ${temp}/hptdrvdl-${modname}-${tag}; then
+      logecho "update:Failed to create directory ${temp}/${temp}/hptdrvdl-${modname}-${tag}. Updating ${modname} is skipped."
       continue
     fi
 
-    if test ! -f ${temp}/hptdrvdl-${tag}/filelist; then
-      wget --tries=2 --timeout=10 "${webroot}/${tag}/filelist" -O "${temp}/hptdrvdl-${tag}/filelist" -o "${temp}/hptdrvdl-${tag}/log"
-      ret=$?
-      logcat "${temp}/hptdrvdl-${tag}/log"
-      if test "${ret}" != "0"; then
-        logecho "update:failed to download filelist from ${webroot}/${tag}/filelist. Updating ${modname} is skipped."
-        rm -f "${temp}/hptdrvdl-${tag}/filelist"
+    wget --check-certificate=off --tries=2 --timeout=30 "${webroot}/${modname}/${tag}/file" \
+      -O "${temp}/hptdrvdl-${modname}-${tag}/file" -o "${temp}/hptdrvdl-${modname}-${tag}/log"
+    ret=$?
+    logcat "${temp}/hptdrvdl-${modname}-${tag}/log"
+    if test "${ret}" != "0"; then
+      logecho "update:failed to download filelist from ${webroot}/${modname}/${tag}/file. Updating ${modname} is skipped."
+      rm -f "${temp}/hptdrvdl-${modname}-${tag}/file"
+      continue
+    fi
+
+    tgt=`cat "${temp}/hptdrvdl-${modname}-${tag}/file" | cut -d: -f1`
+    sum=`cat "${temp}/hptdrvdl-${modname}-${tag}/file" | cut -d: -f2`
+    if test -f "$cache/$tgt"; then
+      oldsum=`md5sum "$cache/$tgt" | cut -d\  -f1`
+      if [ "$oldsum" == "$sum" ]; then
         continue
       fi
-    else
-      logecho "update:Reuse filelist ${temp}/hptdrvdl-${tag}/filelist for module ${modname}"
     fi
 
-    cd "${drvroot}/${modname}"
-    md5sum --status -c "${temp}/hptdrvdl-${tag}/filelist" >/dev/null 2>&1
-    if test $? = "0"; then
-      logecho "update:md5sum showed that source files are up to date."
-      cd /
+    wget --check-certificate=off --tries=2 --timeout=300 "${webroot}/${modname}/${tag}/${tgt}" \
+      -O "${temp}/hptdrvdl-${modname}-${tag}/${tgt}" -o "${temp}/hptdrvdl-${modname}-${tag}/tgt.log"
+    ret=$?
+    logcat "${temp}/hptdrvdl-${modname}-${tag}/tgt.log"
+    if test "${ret}" != "0"; then
+      logecho "update:failed to download driver package from ${webroot}/${modname}/${tag}/${tgt}. Updating ${modname} is skipped."
+      rm -f "${temp}/hptdrvdl-${modname}-${tag}/tgt.file"
       continue
     fi
 
-    cd "${temp}/hptdrvdl-${tag}"
-
-    cat ./filelist | while read -a line; do
-      name="${line[1]}"
-      dir=`dirname "${name}"`
-      mkdir -p "${dir}"
-      if test ! -f "${name}"; then
-        for i in 1 2 3 4 5; do
-          wget --tries=2 --timeout=10 "${webroot}/${tag}/${name}" -O "${name}" -o "${temp}/hptdrvdl-${tag}/log"
-          ret=$?
-          if test "${ret}" = "0"; then
-            break
-          fi
-        done
-        logcat "${temp}/hptdrvdl-${tag}/log"
-        if test "${ret}" != "0"; then
-          logecho "update:failed to download ${name} from ${webroot}/${tag}/${name}. Updating ${modename} is skipped."
-          rm -f "${name}"
-          break
-        else
-          md5=$(md5sum "${name}" | cut -d\  -f1)
-          if test "${md5}" != "${line[0]}"; then
-            logecho "update:md5 for file ${name} mismatch: cur ${md5} desired ${line[0]}."
-            rm -f "${name}"
-            ret=1
-            break
-          fi
-        fi
-      else
-        logecho "update:Reuse source code ${temp}/hptdrvdl-${tag}/${name} for module ${modname}"
-      fi
-    done
-
-    if test "$ret" = "0"; then # copy file to destination
-      cat filelist | while read -a line; do
-        name="${line[1]}"
-        if ! diff "${name}" "${drvroot}/${modname}/${name}" >/dev/null 2>&1; then
-          mv -vf "${drvroot}/${modname}/${name}" "${drvroot}/${modname}/${name}.${date}"
-          cp -vf "${name}" "${drvroot}/${modname}/${name}"
-        fi
-      done
+    newsum=`md5sum "${temp}/hptdrvdl-${modname}-${tag}/${tgt}" | cut -d\  -f1`
+    if [ "$newsum" != "$sum" ]; then
+      logecho "update:md5 of ${tgt} mismatch: ${newsum} - ${sum}"
+      rm -f "${temp}/hptdrvdl-${modname}-${tag}/tgt.file"
+      rm -f "${temp}/hptdrvdl-${modname}-${tag}/${tgt}"
+      continue
     fi
-  done
 
-  cd /
+    mv ${temp}/hptdrvdl-${modname}-${tag}/${tgt} "$cache/"
+
+    drvtmp=`mktemp -d`
+    if test -d ${drvtmp}; then
+      tar xf "$cache/${tgt}" -C $drvtmp
+      binfile=`ls $drvtmp/*.bin`
+      sh $binfile
+    fi
+    rm -rf $drvtmp
+  done
 
   rm -rf "${temp}/"hptdrvdl-*
 
@@ -1439,11 +1624,10 @@ dumpkernels()
     suse )
       kernelrpms=$(rpm -qa | grep ^kernel | grep -v devel | grep -v firmware)
       kerneldrpms=$(rpm -qa | grep ^kernel | grep devel)
-      zypper -q -n ll >/dev/null 2>&1
-      if test $? = 0; then
-        reps=$(zypper -n --disable-system-resolvables pa | grep kernel | grep devel)
+      if test ! -f $pidfile; then
+        reps=$(zypper $zypperoption pa | grep kernel | grep devel)
       else
-        reps="zypper pa failed: $?"
+        reps="yum is in use"
       fi
       ;;
     debian | ubuntu )
@@ -1526,8 +1710,7 @@ compile()
 
       if test "${existmod}" = ""; then
         buildit=1
-      fi
-      if test "$FORCE" = "1"; then
+      elif test "$FORCE" = "1"; then
         buildit=1
       fi
 
@@ -1549,7 +1732,14 @@ compile()
         pushd $(dirname ${config}) >/dev/null
         logecho "compile:building driver ${modname} for kernel ${kerver}"
         rm -rf *.ko .build
-        make KERNELDIR=$kerneldir > "$(pwd)/build.log" 2>&1
+        BUILDOPTION=""
+        if grep -s -q SKIP_STACK_VALIDATION $kerneldir/Makefile; then
+          if [ ! -x $kerneldir/tools/objtool/objtool ]; then
+            BUILDOPTION="SKIP_STACK_VALIDATION=1"
+            logecho "compile: $kerneldir can not build with STACK_VALIDATION"
+          fi
+        fi
+        make KERNELDIR=$kerneldir $BUILDOPTION > "$(pwd)/build.log" 2>&1
         logcat "$(pwd)/build.log"
         if test -f "${modname}.ko"; then
           if test "${existmod}" != ""; then
@@ -1563,7 +1753,7 @@ compile()
             logecho "cp ${modname}.ko ${dir}/scsi/"
             cp "${modname}.ko" "${dir}/scsi/"
           fi
-          removeconflictmod "${modname}" "${kerver}"
+          removeconfmod "${modname}" "${kerver}"
           depmod -a "${kerver}"
         else
           logecho "compile:failed to build driver ${modname} for kernel ${kerver}"
