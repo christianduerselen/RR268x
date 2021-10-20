@@ -6,17 +6,6 @@
 #include "osm_linux.h"
 
 /* hardware access */
-HPT_U8   os_inb  (void *port) { return inb((unsigned)(HPT_UPTR)port); }
-HPT_U16  os_inw  (void *port) { return inw((unsigned)(HPT_UPTR)port); }
-HPT_U32  os_inl  (void *port) { return inl((unsigned)(HPT_UPTR)port); }
-
-void  os_outb (void *port, HPT_U8 value) { outb(value, (unsigned)(HPT_UPTR)port); }
-void  os_outw (void *port, HPT_U16 value) { outw(value, (unsigned)(HPT_UPTR)port); }
-void  os_outl (void *port, HPT_U32 value) { outl(value, (unsigned)(HPT_UPTR)port); }
-void  os_insw (void *port, HPT_U16 *buffer, HPT_U32 count) 
-{ insw((unsigned)(HPT_UPTR)port, (void *)buffer, count); }
-void  os_outsw(void *port, HPT_U16 *buffer, HPT_U32 count)
-{ outsw((unsigned)(HPT_UPTR)port, (void *)buffer, count); }
 
 HPT_U8   os_readb  (void *addr) { return readb(addr); }
 HPT_U16  os_readw  (void *addr) { return readw(addr); }
@@ -354,8 +343,16 @@ void refresh_sd_flags(PVBUS_EXT vbus_ext)
 			int i, minor;
 			for (i=0; major[i]; i++) {
 				for (minor=0; minor<=240; minor+=16) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
+					struct block_device *bdev = blkdev_get_by_dev(MKDEV(major[i], minor), FMODE_READ,NULL);
+#else
 					struct block_device *bdev = bdget(MKDEV(major[i], minor));
-					if (bdev &&
+#endif
+					if (
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
+						!IS_ERR(bdev)					
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5,10,0)
+						bdev&&
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
 						blkdev_get(bdev, FMODE_READ,NULL)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,28)
@@ -363,28 +360,34 @@ void refresh_sd_flags(PVBUS_EXT vbus_ext)
 #else 
 						blkdev_get(bdev, FMODE_READ, 0 __BDEV_RAW)
 #endif
-						==0) {
+						==0
+#endif
+						) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
 						if (bdev->bd_disk && ((disk_to_dev(bdev->bd_disk)->parent)==&SDptr->sdev_gendev)) {
-#else
+#else 
 						if (bdev->bd_disk && bdev->bd_disk->driverfs_dev==&SDptr->sdev_gendev) {
 #endif
 							if (vbus_ext->sd_flags[id] & SD_FLAG_REVALIDATE) {
 								if (bdev->bd_disk->fops->revalidate_disk)
 									bdev->bd_disk->fops->revalidate_disk(bdev->bd_disk);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
 								inode_lock(bdev->bd_inode);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
+#else 
 								mutex_lock(&bdev->bd_inode->i_mutex);
+#endif
 #else 
 								down(&bdev->bd_inode->i_sem);
 #endif
 								i_size_write(bdev->bd_inode, (loff_t)get_capacity(bdev->bd_disk)<<9);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
 								inode_unlock(bdev->bd_inode);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
+#else 
 								mutex_unlock(&bdev->bd_inode->i_mutex);
-#else
+#endif
+#else 
 								up(&bdev->bd_inode->i_sem);
 #endif
 								vbus_ext->sd_flags[id] &= ~SD_FLAG_REVALIDATE;
@@ -624,6 +627,8 @@ void os_schedule_task(void *osext, OSM_TASK *task)
 
 HPT_U8 os_get_vbus_seq(void *osext)
 {
+	if(!((PVBUS_EXT)osext)->host)
+		return 0;
 	return ((PVBUS_EXT)osext)->host->host_no;
 }
 

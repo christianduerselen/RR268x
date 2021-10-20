@@ -2380,7 +2380,11 @@ static HPT_U32 hpt_scsi_ioctl_get_diskid(Scsi_Device * dev, int cmd, void *arg)
 
 int (*hpt_scsi_ioctl_handler)(Scsi_Device * dev, int cmd, void *arg) = 0;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,1,0)
 static int hpt_scsi_ioctl(Scsi_Device * dev, int cmd, void *arg)
+#else
+static int hpt_scsi_ioctl(Scsi_Device * dev, unsigned int cmd, void *arg)
+#endif
 {
 	/* support for HDIO_xxx ioctls */
 	if ((cmd & 0xfffff300)==0x300) {

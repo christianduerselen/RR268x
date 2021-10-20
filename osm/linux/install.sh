@@ -10,7 +10,7 @@ case ${KERNEL_VER} in
 	OBJ=o
 	MODVER=`modinfo -f%{kernel_version} ${PWD}/${TARGETNAME}.${OBJ}`
 	;;
-	2.6 | 3.* | 4.* )
+	2.6 | 3.* | 4.* | 5.* )
 	OBJ=ko
 	MODVER=`modinfo -F vermagic ${PWD}/${TARGETNAME}.${OBJ} | cut -d' ' -f1`
 	;;
@@ -149,13 +149,13 @@ debian | ubuntu )
 			rm /boot/initrd.img-${MODVER}
 		fi
 	fi
-#	if [ -f /etc/initramfs-tools/initramfs.conf ]; then
-#		if grep ^ROOTDELAY -s -q /etc/initramfs-tools/initramfs.conf; then
-#			sed -i s"#^ROOTDELAY.*#ROOTDELAY=180#" /etc/initramfs-tools/initramfs.conf
-#		else
-#			echo "ROOTDELAY=180" >> /etc/initramfs-tools/initramfs.conf
-#		fi
-#	fi
+	#if [ -f /etc/initramfs-tools/initramfs.conf ]; then
+	#	if grep ^ROOTDELAY -s -q /etc/initramfs-tools/initramfs.conf; then
+	#		sed -i s"#^ROOTDELAY.*#ROOTDELAY=180#" /etc/initramfs-tools/initramfs.conf
+	#	else
+	#		echo "ROOTDELAY=180" >> /etc/initramfs-tools/initramfs.conf
+	#	fi
+	#fi
 	$MKINITRD -o /boot/initrd.img-${MODVER} ${MODVER}
 ;;
 * )

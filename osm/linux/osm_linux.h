@@ -189,8 +189,18 @@ typedef void irqreturn_t;
 #define scsi_to_pci_dma_dir(scsi_dir) ((int)(scsi_dir))
 #endif
 
+#ifndef RHEL_RELEASE_CODE
+#define RHELV_RELEASE_CODE 0
+#else 
+#define RHELV_RELEASE_CODE RHEL_RELEASE_CODE
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,11)
-#define hpt_verify_area(type, addr, size) (!access_ok((type), (addr), (size)))
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0) || RHELV_RELEASE_CODE >= 2049 /* CentOS 8.1 */
+		#define hpt_verify_area(type, addr, size) (!access_ok((addr), (size)))
+	#else 
+		#define hpt_verify_area(type, addr, size) (!access_ok((type), (addr), (size)))
+	#endif
 #else 
 #define hpt_verify_area(type, addr, size) (verify_area((type), (addr), (size)))
 #endif

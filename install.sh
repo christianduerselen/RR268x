@@ -1,13 +1,19 @@
 #!/bin/bash
 
+MODNAME=rr2680
+export DEBIAN_FRONTEND=noninteractive
+
 if test $(id -u) != "0"; then
+  if [ "$HPTUPDATER" != "" ]; then
+    echo "Invoked by driver updater not as administrator, exiting now..."
+    exit 1
+  fi
   echo "Please supply root's password to install this package. "
   su -c "$0"
   ret=$?
   exit $ret
 fi
 
-MODNAME=rr2680
 #`grep TARGETNAME product/*/linux/Makefile | sed s'# ##'g | cut -d\= -f2 | sed s'#\r##'`
 
 #echo $MODNAME
@@ -33,83 +39,256 @@ cp dist/hptdrv-function /usr/share/hptdrv/
 cp dist/hptdrv-monitor /etc/init.d/
 cp dist/hptdrv-rebuild /usr/sbin/
 cp dist/hptdrv-update /etc/cron.daily/
-chmod 755 /etc/init.d/hptdrv-monitor /usr/sbin/hptdrv-rebuild /etc/cron.daily/hptdrv-update /usr/share/hptdrv/hptdrv-function
+if ! cp dist/hptunin /sbin/hptunin${MODNAME}; then
+  echo "Failed to install uninstaller /sbin/hptunin${MODNAME}, quit now."
+  exit 1
+fi
+
+sed -i s#^MODNAME=#MODNAME=${MODNAME}# /sbin/hptunin${MODNAME}
+chmod 755 /etc/init.d/hptdrv-monitor /usr/sbin/hptdrv-rebuild /etc/cron.daily/hptdrv-update /usr/share/hptdrv/hptdrv-function /sbin/hptunin${MODNAME}
+
+if test -d /usr/lib/dracut/modules.d; then
+  if test -f /usr/lib/dracut/modules.d/40hptdrv/dracut-hptdrv.sh; then
+    if ! grep -s -q "^modprobe $MODNAME" /usr/lib/dracut/modules.d/40hptdrv/dracut-hptdrv.sh; then
+      echo "modprobe $MODNAME 2> /dev/null" >> /usr/lib/dracut/modules.d/40hptdrv/dracut-hptdrv.sh
+    fi
+  else
+    mkdir -p /usr/lib/dracut/modules.d/40hptdrv
+    cp dist/60-persistent-storage-hptblock.rules /usr/lib/dracut/modules.d/40hptdrv/
+    cp dist/dracut-hptdrv.sh /usr/lib/dracut/modules.d/40hptdrv/
+    cp dist/module-setup.sh /usr/lib/dracut/modules.d/40hptdrv/
+    chmod +x /usr/lib/dracut/modules.d/40hptdrv/dracut-hptdrv.sh
+    chmod +x /usr/lib/dracut/modules.d/40hptdrv/module-setup.sh
+  fi
+fi
+
+if test -e /etc/debian_version; then
+  rm -f /etc/init.d/hptmod
+  install -m 755 -o root -g root dist/hptmod /etc/init.d/
+  str_sed=`sed -n '/Required-Start:.*hptmod/p' /etc/init.d/udev`
+  if test "$str_sed" = "" ;then
+    sed -i '/Required-Start:/s/.*/& hptmod/' /etc/init.d/udev
+  fi
+fi
 
 . /usr/share/hptdrv/hptdrv-function
 echo "Checking and installing required toolchain and utility ..."
 
-case "${dist}" in
-  debian | ubuntu )
-    if grep ^deb /etc/apt/sources.list | grep -s -q cdrom; then
-      echo "Please insert the system installation disc in order to install build toolchain if needed."
-      read -p "Press ENTER to continue."
-    fi
-    ;;
-  suse )
-    # -E option is unavailable on SuSE 12.1
-    if zypper lr -u | grep cd\: | grep device -s -q; then
-      echo "Please insert the system installation disc in order to install build toolchain if needed."
-      read -p "Press ENTER to continue."
-    fi
-    ;;
-esac
-
 checkandinstall() {
-  if ! type -p $1 >/dev/null 2>&1; then
+  if ! type $1 >/dev/null 2>&1; then
     #echo "Installing program $1 ..."
-    installtool $1 || return 1
+    installtool $1
+    if ! type $1 >/dev/null 2>&1; then
+      missing=1
+    fi
   else
     echo "Found program $1 (`type -p $1`)"
     return 0
   fi
 }
 
+missing=0
 checkandinstall make
-if ! type make >/dev/null 2>&1; then
-  echo "Could not find make package, driver could not be built without this package. Please install it manually."
-fi
-
 checkandinstall gcc
-if ! type gcc >/dev/null 2>&1; then
-  echo "Could not find gcc package, driver could not be built without this package. Please install it manually."
-fi
-
 checkandinstall perl
-if ! type perl >/dev/null 2>&1; then
-  echo "Could not find perl package, driver could not be built without this package. Please install it manually."
-fi
-
 checkandinstall wget
-if ! type wget >/dev/null 2>&1; then
-  echo "Could not find wget package, driver source code could not be updated without this package. Please install it manually."
+
+case "$dist" in
+  fedora )
+    if ! installlib elfutils-libelf-devel; then
+      missing=1
+    fi
+    ;;
+  *)
+    ;;
+esac
+
+updategrub=0
+if test -f /etc/default/grub; then
+  if grep -s -q GRUB_CMDLINE_LINUX= /etc/default/grub; then
+    opts=`grep GRUB_CMDLINE_LINUX= /etc/default/grub | cut -d= -f2- | sed -e s'#^"##' -e s'#"$##'`
+    echo "old $opts"
+    newopts=`for o in $opts; do
+               echo $o | grep intel_iommu= -s -q && continue
+               echo $o | grep amd_iommu= -s -q && continue
+               echo $o | grep pcie_aspm= -s -q && continue
+               echo $o
+             done`
+    if [ -z "$newopts" ]; then
+      newopts="intel_iommu=off amd_iommu=off pcie_aspm=off"
+      if [ -z "$opts" ]; then
+        opts="invalid_option" # dash error empty variable
+      fi
+    else
+      newopts="$newopts intel_iommu=off amd_iommu=off pcie_aspm=off"
+    fi
+    echo "new $newopts"
+    if [ "$newopts" != "$opts" ]; then
+      newopts=`echo $newopts`
+      sed -i.bak /GRUB_CMDLINE_LINUX=/cGRUB_CMDLINE_LINUX=\""$newopts"\" /etc/default/grub
+      updategrub=1
+    fi
+  else
+    cp /etc/default/grub /etc/default/grub.bak
+    echo GRUB_CMDLINE_LINUX=\""$newopts"\" >> /etc/default/grub
+    updategrub=1
+  fi
 fi
 
-fixmodload
+if test "$updategrub" = "1"; then
+  case "$dist" in
+    debian | ubuntu )
+      update-grub
+      ;;
+    centos )
+      if test -f /boot/efi/EFI/centos/grub.cfg; then
+        grub2-mkconfig -o /boot/efi/EFI/centos/grub.cfg
+      fi
+      if test -f /boot/grub2/grub.cfg; then
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+      fi
+      ;;
+    *)
+      ;;
+  esac
+fi
 
-#touch /var/lock/subsys/hptdrv-monitor
-if type systemctl >/dev/null 2>&1; then
-  if test -d /usr/lib/systemd/system; then
-    cp dist/hptdrv-monitor.service /usr/lib/systemd/system/
+OS=
+[ -f /etc/lsb-release ] && OS=`sed -n '/DISTRIB_ID/p' /etc/lsb-release | cut -d'=' -f2 | tr [[:upper:]] [[:lower:]]` 
+if [ "${OS}" = "ubuntu" ] ;then
+  type upstart-udev-bridge > /dev/null  2>&1
+  if [ "$?" = 0 ] ;then
+    install -m 755 -o root -g root dist/hptdrv.conf /etc/init/
+    install -m 755 -o root -g root dist/udev.override /etc/init/
+  fi 
+fi
+
+procinit() {
+  tgt=`readlink /sbin/init`
+  if test $? -eq 0; then
+    if echo $tgt | grep -s -q -i systemd; then
+      rm -f /sbin/hptdrv-monitor
+      cp dist/hptdrv-monitor /sbin/
+      chmod +x /sbin/hptdrv-monitor
+
+      if test -d "/lib/systemd/system"; then
+        rm -f /lib/systemd/system/systemd-hptdrv.service
+        rm -f /lib/systemd/system/hptdrv-monitor.service
+
+        systemctl list-units | grep -s -q networking.service # ubuntu14.10
+        if [ "$?" = 0 ] ;then    
+          cp dist/hptdrv-monitor-debian.service /lib/systemd/system/hptdrv-monitor.service
+        else
+          cp dist/hptdrv-monitor.service /lib/systemd/system/hptdrv-monitor.service
+        fi
+        cp dist/systemd-hptdrv.service /lib/systemd/system/
+      else
+        rm -f /usr/lib/systemd/system/systemd-hptdrv.service
+        rm -f /usr/lib/systemd/system/hptdrv-monitor.service
+
+        systemctl list-units | grep -s -q networking.service
+        if [ "$?" = 0 ] ;then    
+          cp dist/hptdrv-monitor-debian.service /usr/lib/systemd/system/hptdrv-monitor.service
+        else
+          cp dist/hptdrv-monitor.service /usr/lib/systemd/system/hptdrv-monitor.service
+        fi
+        cp dist/systemd-hptdrv.service /usr/lib/systemd/system/	
+      fi
+      # suse 13.1 bug
+      if test -f "/usr/lib/systemd/system/network@.service"; then
+        mkdir -p "/usr/lib/systemd/system/network@.service.d/"
+        cp dist/50-before-network-online.conf "/usr/lib/systemd/system/network@.service.d/"
+      fi
+
+      if test -d /etc/udev/rules.d; then
+        cp dist/60-persistent-storage-hptblock.rules /etc/udev/rules.d/
+        udevadm control --reload
+        sleep 1
+        udevadm trigger
+        sleep 1
+      fi
+
+      systemctl daemon-reload >/dev/null 2>&1
+      systemctl enable hptdrv-monitor
+      systemctl enable systemd-hptdrv >/dev/null 2>&1
+      systemctl start  hptdrv-monitor > /dev/null 2>&1
+
+      rm -f /etc/init.d/hptmod
+      cp dist/hptmod /etc/init.d/
+      chmod 755 /etc/init.d/hptmod
+      return
+    fi
+  fi
+
+  if type update-rc.d >/dev/null 2>&1; then
+    update-rc.d -f hptdrv-monitor remove >/dev/null 2>&1
+    update-rc.d hptdrv-monitor defaults >/dev/null 2>&1
+
+    if test -e /etc/debian_version; then 
+      update-rc.d -f hptmod remove >/dev/null 2>&1
+      if test -s /etc/init.d/.depend.boot; then
+        update-rc.d hptmod defaults >/dev/null 2>&1
+        update-rc.d hptmod enable S >/dev/null 2>&1
+      else
+        # start it before udev
+        update-rc.d hptmod start 03 S . >/dev/null 2>&1
+      fi
+    fi
+  elif type systemctl >/dev/null 2>&1; then
+    rm -f /sbin/hptdrv-monitor
+    cp dist/hptdrv-monitor /sbin/
+    chmod +x /sbin/hptdrv-monitor
+
+    if test -d "/lib/systemd/system"; then
+      rm -f /lib/systemd/system/systemd-hptdrv.service
+      rm -f /lib/systemd/system/hptdrv-monitor.service
+
+      systemctl list-units | grep -s -q networking.service # ubuntu14.10
+      if [ "$?" = 0 ] ;then    
+        cp dist/hptdrv-monitor-debian.service /lib/systemd/system/hptdrv-monitor.service
+      else
+        cp dist/hptdrv-monitor.service /lib/systemd/system/hptdrv-monitor.service
+      fi
+      cp dist/systemd-hptdrv.service /lib/systemd/system/
+    else
+      rm -f /usr/lib/systemd/system/systemd-hptdrv.service
+      rm -f /usr/lib/systemd/system/hptdrv-monitor.service
+
+      systemctl list-units | grep -s -q networking.service
+      if [ "$?" = 0 ] ;then    
+        cp dist/hptdrv-monitor-debian.service /usr/lib/systemd/system/hptdrv-monitor.service
+      else
+        cp dist/hptdrv-monitor.service /usr/lib/systemd/system/hptdrv-monitor.service
+      fi
+      cp dist/systemd-hptdrv.service /usr/lib/systemd/system/	
+    fi
     # suse 13.1 bug
     if test -f "/usr/lib/systemd/system/network@.service"; then
       mkdir -p "/usr/lib/systemd/system/network@.service.d/"
       cp dist/50-before-network-online.conf "/usr/lib/systemd/system/network@.service.d/"
     fi
-  elif test -d /lib/systemd/system; then
-    cp dist/hptdrv-monitor.service /lib/systemd/system/
-  else
-    :
-  fi
-  systemctl daemon-reload >/dev/null 2>&1
-  systemctl enable hptdrv-monitor.service
-  systemctl start hptdrv-monitor.service
-else
-  if type update-rc.d >/dev/null 2>&1; then
-    update-rc.d -f hptdrv-monitor remove >/dev/null 2>&1
-    update-rc.d hptdrv-monitor defaults >/dev/null 2>&1
+
+    if test -d /etc/udev/rules.d; then
+      cp dist/60-persistent-storage-hptblock.rules /etc/udev/rules.d/
+      udevadm control --reload
+      sleep 1
+      udevadm trigger
+      sleep 1
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl enable hptdrv-monitor
+    systemctl enable systemd-hptdrv >/dev/null 2>&1
+    systemctl start  hptdrv-monitor > /dev/null 2>&1
+
+    rm -f /etc/init.d/hptmod
+    cp dist/hptmod /etc/init.d/
+    chmod 755 /etc/init.d/hptmod
   elif type insserv >/dev/null 2>&1; then
     insserv -r /etc/init.d/hptdrv-monitor
     insserv /etc/init.d/hptdrv-monitor
+  elif type chkconfig >/dev/null 2>&1; then
+    chkconfig --add hptdrv-monitor
   else
     ln -sf ../init.d/hptdrv-monitor /etc/rc0.d/K01hptdrv-monitor
     ln -sf ../init.d/hptdrv-monitor /etc/rc6.d/K01hptdrv-monitor
@@ -119,9 +298,56 @@ else
     ln -sf ../init.d/hptdrv-monitor /etc/rc4.d/S01hptdrv-monitor
     ln -sf ../init.d/hptdrv-monitor /etc/rc5.d/S01hptdrv-monitor
   fi
+}
+
+procinit
+
+if [ -d /etc/initramfs-tools/scripts/init-top ]; then
+  if test -f /etc/initramfs-tools/scripts/init-top/hptdrv; then
+    if ! grep -s -q "modprobe $MODNAME" /etc/initramfs-tools/scripts/init-top/hptdrv; then
+      cat dist/hptdrv.part >> /etc/initramfs-tools/scripts/init-top/hptdrv
+    fi
+  else
+    install -m 755 -o root -g root dist/hptdrv /etc/initramfs-tools/scripts/init-top/
+  fi
+fi
+
+if [ "$HPTUPDATER" != "" ]; then
+  echo "Invoked by driver updater, exiting now..."
+  exit 0
+fi
+
+touch /var/lib/hptdrv.rebuild
+
+if type systemctl >/dev/null 2>&1; then
+  systemctl start hptdrv-monitor
+else
   /etc/init.d/hptdrv-monitor start
 fi
 
-#/etc/init.d/hptdrv-monitor force-stop
+if [ "$missing" != "0" ]; then
+  echo "Toolchain to built the driver is incomplete, please install the missing package to build the driver."
+  echo "Exit."
+  exit 1
+fi
+
+if type systemctl >/dev/null 2>&1; then
+  systemctl stop hptdrv-monitor
+  # restart service in case kernel updated later in this sesssion.
+  systemctl start hptdrv-monitor
+else
+  /etc/init.d/hptdrv-monitor stop
+  # restart service in case kernel updated later in this sesssion.
+  /etc/init.d/hptdrv-monitor start
+fi
+
+if [ -f /tmp/hptdrv-$MODNAME-nostart.lck ]; then
+  exit 0
+fi
+
+echo ""
+echo "Please run hptunin${MODNAME} to uninstall the driver files."
+echo ""
+echo "Please restart the system for the driver to take effect."
 
 # vim: expandtab ts=2 sw=2 ai

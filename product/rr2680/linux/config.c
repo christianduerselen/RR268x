@@ -23,14 +23,14 @@ int init_config(void)
 
 char driver_name[] = "rr2680";
 char driver_name_long[] = "RocketRAID 268x controller driver";
-char driver_ver[] = "v2.2 (09.11.2017)";
+char driver_ver[] = "v3.0.1 (20.10.2021)";
 int  osm_max_targets = 32;
 int os_max_cache_size = 0x2000000;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
-static const struct pci_device_id hpt_pci_tbl2[] = {
+const struct pci_device_id hpt_pci_tbl[] = {
 	{PCI_DEVICE(0x1103, 0x2680), 0, 0, 0},
 	{}
 };
-MODULE_DEVICE_TABLE(pci, hpt_pci_tbl2);
+MODULE_DEVICE_TABLE(pci, hpt_pci_tbl);
 #endif
