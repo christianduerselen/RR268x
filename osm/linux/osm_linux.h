@@ -42,7 +42,11 @@
 #include <linux/reboot.h>
 #include <linux/random.h>
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
+#include <linux/uaccess.h>
+#else
 #include <asm/uaccess.h>
+#endif
 #include <asm/io.h>
 #include <asm/div64.h>
 
@@ -61,6 +65,7 @@
 #define CONFIG_SCSI_PROC_FS
 #else 
 #include <linux/blkdev.h>
+#include <linux/major.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi.h>
@@ -232,7 +237,11 @@ struct hpt_scsi_pointer {
 };
 
 typedef char check_sizeof_hpt_scsi_pointer[sizeof(struct scsi_pointer)-sizeof(struct hpt_scsi_pointer)];
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
+#define HPT_SCP(SCpnt) ((struct hpt_scsi_pointer *)scsi_cmd_priv(SCpnt))
+#else
 #define HPT_SCP(SCpnt) ((struct hpt_scsi_pointer *)&(SCpnt)->SCp)
+#endif
 
 /* private headers */
 

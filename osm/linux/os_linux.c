@@ -182,7 +182,7 @@ void freelist_put_dma(struct freelist *list, void *p, BUS_ADDRESS busaddr)
 
 BUS_ADDRESS get_dmapool_phy_addr(void *osext, void * dmapool_virt_addr)
 {
-	return (BUS_ADDRESS)virt_to_bus(dmapool_virt_addr);
+	return (BUS_ADDRESS)virt_to_phys(dmapool_virt_addr);
 }
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,18)) && defined(CONFIG_HIGHMEM)
@@ -343,67 +343,81 @@ void refresh_sd_flags(PVBUS_EXT vbus_ext)
 			int i, minor;
 			for (i=0; major[i]; i++) {
 				for (minor=0; minor<=240; minor+=16) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
-					struct block_device *bdev = blkdev_get_by_dev(MKDEV(major[i], minor), FMODE_READ,NULL);
+					struct block_device *bdev = NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0)
+					struct file *bdev_file = bdev_file_open_by_dev(MKDEV(major[i], minor), BLK_OPEN_READ, NULL, NULL);
+					if (!IS_ERR(bdev_file))
+						bdev = file_bdev(bdev_file);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6,5,0)
+					struct bdev_handle *bdev_handle = bdev_open_by_dev(MKDEV(major[i], minor), BLK_OPEN_READ, NULL, NULL);
+					if (!IS_ERR(bdev_handle))
+						bdev = bdev_handle->bdev;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
+					bdev = blkdev_get_by_dev(MKDEV(major[i], minor), FMODE_READ, NULL);
+					if (IS_ERR(bdev)) bdev = NULL;
 #else
-					struct block_device *bdev = bdget(MKDEV(major[i], minor));
-#endif
-					if (
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
-						!IS_ERR(bdev)					
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(5,10,0)
-						bdev&&
+					bdev = bdget(MKDEV(major[i], minor));
+					if (bdev) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38)
-						blkdev_get(bdev, FMODE_READ,NULL)
+						if (blkdev_get(bdev, FMODE_READ, NULL) != 0)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,28)
-						blkdev_get(bdev, FMODE_READ)
-#else 
-						blkdev_get(bdev, FMODE_READ, 0 __BDEV_RAW)
+						if (blkdev_get(bdev, FMODE_READ) != 0)
+#else
+						if (blkdev_get(bdev, FMODE_READ, 0 __BDEV_RAW) != 0)
 #endif
-						==0
+							bdev = NULL;
+					}
 #endif
-						) {
+					if (bdev) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
 						if (bdev->bd_disk && ((disk_to_dev(bdev->bd_disk)->parent)==&SDptr->sdev_gendev)) {
-#else 
+#else
 						if (bdev->bd_disk && bdev->bd_disk->driverfs_dev==&SDptr->sdev_gendev) {
 #endif
 							if (vbus_ext->sd_flags[id] & SD_FLAG_REVALIDATE) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,11,0)
 								if (bdev->bd_disk->fops->revalidate_disk)
 									bdev->bd_disk->fops->revalidate_disk(bdev->bd_disk);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
 								inode_lock(bdev->bd_inode);
-#else 
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 								mutex_lock(&bdev->bd_inode->i_mutex);
-#endif
-#else 
+#else
 								down(&bdev->bd_inode->i_sem);
 #endif
 								i_size_write(bdev->bd_inode, (loff_t)get_capacity(bdev->bd_disk)<<9);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
 								inode_unlock(bdev->bd_inode);
-#else 
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)
 								mutex_unlock(&bdev->bd_inode->i_mutex);
-#endif
-#else 
+#else
 								up(&bdev->bd_inode->i_sem);
 #endif
+#endif /* < 5.11 */
 								vbus_ext->sd_flags[id] &= ~SD_FLAG_REVALIDATE;
 							}
-							if (bdev->bd_openers>1)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,5,0)
+							if (bdev->bd_openers > 1)
 								vbus_ext->sd_flags[id] |= SD_FLAG_IN_USE;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,28)
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0)
+							fput(bdev_file);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6,5,0)
+							bdev_release(bdev_handle);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,28)
 							blkdev_put(bdev, FMODE_READ);
-#else 
+#else
 							blkdev_put(bdev __BDEV_RAW);
 #endif
 							goto next;
 						}
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,28)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0)
+						fput(bdev_file);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6,5,0)
+						bdev_release(bdev_handle);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,28)
 						blkdev_put(bdev, FMODE_READ);
-#else 
+#else
 						blkdev_put(bdev __BDEV_RAW);
 #endif
 					}

@@ -6,6 +6,12 @@
 #include "osm_linux.h"
 #include "hptintf.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,16,0)
+#define HPT_SCSI_DONE(SCpnt) scsi_done(SCpnt)
+#else
+#define HPT_SCSI_DONE(SCpnt) (SCpnt)->scsi_done(SCpnt)
+#endif
+
 MODULE_AUTHOR ("HighPoint Technologies, Inc.");
 MODULE_DESCRIPTION ("RAID driver");
 
@@ -40,8 +46,8 @@ static int hpt_init_one(HIM *him, struct pci_dev *pcidev)
 	pci_set_master(pcidev);
 
 	/* enable 64-bit DMA if possible */
-	if (pci_set_dma_mask(pcidev, 0xffffffffffffffffULL)) {
-		if (pci_set_dma_mask(pcidev, 0xffffffffUL)) {
+	if (dma_set_mask(&pcidev->dev, 0xffffffffffffffffULL)) {
+		if (dma_set_mask(&pcidev->dev, 0xffffffffUL)) {
 			os_printk("failed to set DMA mask\n");
 			return -1;
 		}
@@ -142,7 +148,7 @@ static int hpt_alloc_mem(PVBUS_EXT vbus_ext)
 			if (!p) return -1;
 			for (j = size/f->size; j && i<f->count; i++,j--) {
 				*p = f->head;
-				*(BUS_ADDRESS *)(p+1) = (BUS_ADDRESS)virt_to_bus(p);
+				*(BUS_ADDRESS *)(p+1) = (BUS_ADDRESS)virt_to_phys(p);
 				f->head = p;
 				p = (void **)((unsigned long)p + f->size);
 			}
@@ -155,7 +161,7 @@ static int hpt_alloc_mem(PVBUS_EXT vbus_ext)
 		p = (void **)__get_free_page(GFP_ATOMIC);
 		if (!p) return -1;
 		HPT_ASSERT(((HPT_UPTR)p & (DMAPOOL_PAGE_SIZE-1))==0);
-		dmapool_put_page((PVBUS)vbus_ext->vbus, p, (BUS_ADDRESS)virt_to_bus(p));
+		dmapool_put_page((PVBUS)vbus_ext->vbus, p, (BUS_ADDRESS)virt_to_phys(p));
 	}
 
 	vbus_ext->sd_flags = kmalloc(sizeof(HPT_U8)*osm_max_targets, GFP_ATOMIC);
@@ -528,14 +534,9 @@ static inline void scsicmd_buf_put(struct scsi_cmnd *cmd, void *buf)
 #define CACHE_MPAGE 0x8
 #define CONTROL_MPAGE 0xa
 #define ALL_MPAGES 0x3f
-#ifdef SAM_STAT_CHECK_CONDITION
+/* SAM_STAT_* are enums since kernel 5.15, not #defines - use values directly */
 #define  HPT_SAM_STAT_CHECK_CONDITION SAM_STAT_CHECK_CONDITION
 #define  HPT_SAM_STAT_GOOD SAM_STAT_GOOD
-#else 
-/*deprecated as they are shifted 1 bit right in SAM-3 Status code*/
-#define  HPT_SAM_STAT_CHECK_CONDITION CHECK_CONDITION
-#define  HPT_SAM_STAT_GOOD GOOD
-#endif
 
 /*For un-implemented page/subpage code by device, mode sense shall be terminated with
 	CHECK_CONDITION status, set sense key to ILLEGAL REQUEST, and the additional
@@ -705,13 +706,13 @@ static void os_cmddone(PCOMMAND pCmd)
 		SCpnt->result = (DID_BUS_BUSY<<16);
 		break;
 	default:
-		SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+		SCpnt->result = (DID_ABORT<<16);
 		break;
 	}
 
 	ldm_free_cmds(pCmd);
 	KdPrint(("<8>scsi_done(%p)", SCpnt));
-	SCpnt->scsi_done(SCpnt);
+	HPT_SCSI_DONE(SCpnt);
 }
 
 static int os_buildsgl(PCOMMAND pCmd, PSG pSg, int logical)
@@ -877,7 +878,7 @@ static int os_buildsgl(PCOMMAND pCmd, PSG pSg, int logical)
 
 static void hpt_scsi_set_sense(Scsi_Cmnd *SCpnt, HPT_U8 sk, HPT_U8 asc, HPT_U8 ascq)
 {
-		SCpnt->result = (DRIVER_SENSE << 24) | HPT_SAM_STAT_CHECK_CONDITION;
+		SCpnt->result = HPT_SAM_STAT_CHECK_CONDITION;
 		SCpnt->sense_buffer[0] = 0x70;	
 		SCpnt->sense_buffer[2] = sk; 
 		SCpnt->sense_buffer[7] = 18 - 8;	
@@ -902,13 +903,15 @@ static void hpt_scsi_start_stop_done(PCOMMAND pCmd)
 
 		ldm_free_cmds(pCmd);
 		KdPrint(("<8>scsi_done(%p)", SCpnt));
-		SCpnt->scsi_done(SCpnt);
+		HPT_SCSI_DONE(SCpnt);
 	}
 }
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
 static int hpt_queuecommand (Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
-#else 
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5,16,0)
 static int hpt_queuecommand_lck (Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
+#else
+static int hpt_queuecommand_lck (Scsi_Cmnd * SCpnt)
 #endif
 {
 	struct Scsi_Host *phost = sc_host(SCpnt);
@@ -927,9 +930,10 @@ static int hpt_queuecommand_lck (Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
 	__hpt_do_tasks(vbus_ext);
 
 	SCpnt->result = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,16,0)
 	SCpnt->scsi_done = done;
-
 	HPT_ASSERT(done);
+#endif
 
 	if (sc_channel(SCpnt) || sc_lun(SCpnt)) {
 		SCpnt->result = DID_BAD_TARGET << 16;
@@ -944,7 +948,7 @@ static int hpt_queuecommand_lck (Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
 			
 			if ((buflen = scsicmd_buf_get(SCpnt, (void **)&inquiryData))<36) {
 				scsicmd_buf_put(SCpnt, inquiryData);
-				SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+				SCpnt->result = (DID_ABORT<<16);
 				goto cmd_done;
 			}
 
@@ -1060,7 +1064,7 @@ static int hpt_queuecommand_lck (Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
 			
 			pVDev->Class->reset(pVDev);
 			SCpnt->result = DID_OK<<16;
-			SCpnt->scsi_done(SCpnt);
+			HPT_SCSI_DONE(SCpnt);
 		} else { /*stop, put it into standby mode*/
 			
 			pCmd = ldm_alloc_cmds(pVDev->vbus, pVDev->cmds_per_request);
@@ -1118,7 +1122,7 @@ static int hpt_queuecommand_lck (Scsi_Cmnd * SCpnt, void (*done) (Scsi_Cmnd *))
 		
 		
 		if (mIsArray(pVDev->type)) {
-			SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+			SCpnt->result = (DID_ABORT<<16);
 			break;
 		}
 
@@ -1247,7 +1251,7 @@ set_sense:
 
 		if ((buflen = scsicmd_buf_get(SCpnt, (void **)&inquiryData))<36) {
 			scsicmd_buf_put(SCpnt, inquiryData);
-			SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+			SCpnt->result = (DID_ABORT<<16);
 			break;
 		}
 
@@ -1366,7 +1370,7 @@ set_sense:
 
 		if (scsicmd_buf_get(SCpnt, (void **)&rbuf)<8) {
 			scsicmd_buf_put(SCpnt, rbuf);
-			SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+			SCpnt->result = (DID_ABORT<<16);
 			break;
 		}
 
@@ -1405,7 +1409,7 @@ set_sense:
 
 			if (scsicmd_buf_get(SCpnt, (void **)&rbuf)<12) {
 				scsicmd_buf_put(SCpnt, rbuf);
-				SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+				SCpnt->result = (DID_ABORT<<16);
 				break;
 			}
 			rbuf[0] = (u8)(cap>>56);
@@ -1424,7 +1428,7 @@ set_sense:
 			SCpnt->result = (DID_OK<<16);
 		}
 		else
-			SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+			SCpnt->result = (DID_ABORT<<16);
 		break;
 
 	case READ_6:
@@ -1533,12 +1537,12 @@ set_sense:
 
 	default:
 		hpt_scsi_set_sense(SCpnt, ILLEGAL_REQUEST, 0x20, 0x0);
-		SCpnt->result = ((DRIVER_SENSE<<24) | (DID_OK<<16) | HPT_SAM_STAT_CHECK_CONDITION);
+		SCpnt->result = ((DID_OK<<16) | HPT_SAM_STAT_CHECK_CONDITION);
 		break;
 	}
 cmd_done:
 	KdPrint(("<8>scsi_done(%p)", SCpnt));
-	SCpnt->scsi_done(SCpnt);
+	HPT_SCSI_DONE(SCpnt);
 	return 0;
 }
 
@@ -1804,7 +1808,7 @@ static void hpt_async_ioctl_done(struct _IOCTL_ARG *arg)
 	int buflen;
 	HPT_U8 *buf;
 	HPT_ASSERT(ioctl_cmd);
-	ioctl_cmd->SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
+	ioctl_cmd->SCpnt->result = (DID_ABORT<<16);
 
 	if (arg->result == HPT_IOCTL_RESULT_OK){
 		buflen = scsicmd_buf_get(ioctl_cmd->SCpnt, (void **)&buf);
@@ -1828,7 +1832,7 @@ static void hpt_async_ioctl_done(struct _IOCTL_ARG *arg)
 		 }
 	}
 	
-	ioctl_cmd->SCpnt->scsi_done(ioctl_cmd->SCpnt);	
+	HPT_SCSI_DONE(ioctl_cmd->SCpnt);	
 	if (arg->lpInBuffer){kfree(arg->lpInBuffer);}
 	if (arg->lpOutBuffer){kfree(arg->lpOutBuffer);}
 	kfree(ioctl_cmd);
@@ -1892,8 +1896,8 @@ void hpt_do_async_ioctl(Scsi_Cmnd * SCpnt)
 	
 deal_err:
 	scsicmd_buf_put(SCpnt, buf);
-	SCpnt->result = ((DRIVER_INVALID|SUGGEST_ABORT)<<24) | (DID_ABORT<<16);
-	SCpnt->scsi_done(SCpnt);
+	SCpnt->result = (DID_ABORT<<16);
+	HPT_SCSI_DONE(SCpnt);
 	if (ioctl_cmd && ioctl_args->lpInBuffer) kfree(ioctl_args->lpInBuffer);
 	if (ioctl_cmd && ioctl_args->lpOutBuffer) kfree(ioctl_args->lpOutBuffer);
 	if(ioctl_cmd) kfree(ioctl_cmd);
@@ -2423,7 +2427,9 @@ static Scsi_Host_Template driver_template = {
 	can_queue:               os_max_queue_comm,
 	sg_tablesize:            os_max_sg_descriptors-1,
 	cmd_per_lun:             os_max_queue_comm,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,12,0)
 	unchecked_isa_dma:       0,
+#endif
 	emulated:                0,
 	/* ENABLE_CLUSTERING will cause problem when we handle PIO for highmem_io */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
@@ -2448,6 +2454,9 @@ static Scsi_Host_Template driver_template = {
 	write_info:		hpt_proc_info310_set,
 #endif
 	max_sectors:             128,
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0)
+	cmd_size:                sizeof(struct hpt_scsi_pointer),
 #endif
 	this_id:                 -1
 };
