@@ -3,3 +3,4 @@
 # interpreter when these scripts run on the target system.
 *.sh        text eol=lf
 dist/*      text eol=lf
+dkms.conf   text eol=lf
