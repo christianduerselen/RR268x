@@ -66,6 +66,25 @@
 #else 
 #include <linux/blkdev.h>
 #include <linux/major.h>
+/* SCSI_DISK*_MAJOR removed from linux/major.h in kernel 6.9+ */
+#ifndef SCSI_DISK0_MAJOR
+#define SCSI_DISK0_MAJOR	8
+#define SCSI_DISK1_MAJOR	65
+#define SCSI_DISK2_MAJOR	66
+#define SCSI_DISK3_MAJOR	67
+#define SCSI_DISK4_MAJOR	68
+#define SCSI_DISK5_MAJOR	69
+#define SCSI_DISK6_MAJOR	70
+#define SCSI_DISK7_MAJOR	71
+#define SCSI_DISK8_MAJOR	128
+#define SCSI_DISK9_MAJOR	129
+#define SCSI_DISK10_MAJOR	130
+#define SCSI_DISK11_MAJOR	131
+#define SCSI_DISK12_MAJOR	132
+#define SCSI_DISK13_MAJOR	133
+#define SCSI_DISK14_MAJOR	134
+#define SCSI_DISK15_MAJOR	135
+#endif
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi.h>

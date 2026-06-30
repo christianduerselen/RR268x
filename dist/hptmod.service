@@ -1,0 +1,13 @@
+[Unit]
+Description=Load HighPoint RocketRAID kernel module
+DefaultDependencies=no
+Before=systemd-udevd.service
+ConditionPathIsDirectory=/usr/share/hptdrv
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/modprobe __MODNAME__
+
+[Install]
+WantedBy=sysinit.target

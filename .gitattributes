@@ -1,0 +1,5 @@
+# Linux runtime scripts and packaging files MUST use LF line endings.
+# CRLF causes dash to fail with "Syntax error: word unexpected" / bad
+# interpreter when these scripts run on the target system.
+*.sh        text eol=lf
+dist/*      text eol=lf

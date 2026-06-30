@@ -3,6 +3,16 @@
 MODNAME=rr2680
 export DEBIAN_FRONTEND=noninteractive
 
+# hptsvr (management daemon) uses legacy SG_IO v3 ioctls that are broken
+# on kernels >= 5.17. Skip installing hptdaemon.service on those kernels.
+INSTALL_DAEMON=1
+KMAJOR=$(uname -r | cut -d. -f1)
+KMINOR=$(uname -r | cut -d. -f2)
+if [ "$KMAJOR" -gt 5 ] || { [ "$KMAJOR" -eq 5 ] && [ "$KMINOR" -ge 17 ]; }; then
+  INSTALL_DAEMON=0
+  echo "Kernel $(uname -r): skipping hptdaemon.service (hptsvr incompatible with SG_IO v3 changes)"
+fi
+
 if test $(id -u) != "0"; then
   if [ "$HPTUPDATER" != "" ]; then
     echo "Invoked by driver updater not as administrator, exiting now..."
@@ -62,14 +72,7 @@ if test -d /usr/lib/dracut/modules.d; then
   fi
 fi
 
-if test -e /etc/debian_version; then
-  rm -f /etc/init.d/hptmod
-  install -m 755 -o root -g root dist/hptmod /etc/init.d/
-  str_sed=`sed -n '/Required-Start:.*hptmod/p' /etc/init.d/udev`
-  if test "$str_sed" = "" ;then
-    sed -i '/Required-Start:/s/.*/& hptmod/' /etc/init.d/udev
-  fi
-fi
+# hptmod init script no longer needed — udev auto-loads the module via PCI alias
 
 . /usr/share/hptdrv/hptdrv-function
 echo "Checking and installing required toolchain and utility ..."
@@ -181,7 +184,7 @@ procinit() {
         else
           cp dist/hptdrv-monitor.service /lib/systemd/system/hptdrv-monitor.service
         fi
-        cp dist/systemd-hptdrv.service /lib/systemd/system/
+        [ "$INSTALL_DAEMON" = "1" ] && cp dist/hptdaemon.service /lib/systemd/system/hptdaemon.service
       else
         rm -f /usr/lib/systemd/system/systemd-hptdrv.service
         rm -f /usr/lib/systemd/system/hptdrv-monitor.service
@@ -192,7 +195,7 @@ procinit() {
         else
           cp dist/hptdrv-monitor.service /usr/lib/systemd/system/hptdrv-monitor.service
         fi
-        cp dist/systemd-hptdrv.service /usr/lib/systemd/system/	
+        [ "$INSTALL_DAEMON" = "1" ] && cp dist/hptdaemon.service /usr/lib/systemd/system/hptdaemon.service
       fi
       # suse 13.1 bug
       if test -f "/usr/lib/systemd/system/network@.service"; then
@@ -210,12 +213,7 @@ procinit() {
 
       systemctl daemon-reload >/dev/null 2>&1
       systemctl enable hptdrv-monitor
-      systemctl enable systemd-hptdrv >/dev/null 2>&1
       systemctl start  hptdrv-monitor > /dev/null 2>&1
-
-      rm -f /etc/init.d/hptmod
-      cp dist/hptmod /etc/init.d/
-      chmod 755 /etc/init.d/hptmod
       return
     fi
   fi
@@ -223,17 +221,6 @@ procinit() {
   if type update-rc.d >/dev/null 2>&1; then
     update-rc.d -f hptdrv-monitor remove >/dev/null 2>&1
     update-rc.d hptdrv-monitor defaults >/dev/null 2>&1
-
-    if test -e /etc/debian_version; then 
-      update-rc.d -f hptmod remove >/dev/null 2>&1
-      if test -s /etc/init.d/.depend.boot; then
-        update-rc.d hptmod defaults >/dev/null 2>&1
-        update-rc.d hptmod enable S >/dev/null 2>&1
-      else
-        # start it before udev
-        update-rc.d hptmod start 03 S . >/dev/null 2>&1
-      fi
-    fi
   elif type systemctl >/dev/null 2>&1; then
     rm -f /sbin/hptdrv-monitor
     cp dist/hptdrv-monitor /sbin/
@@ -249,7 +236,7 @@ procinit() {
       else
         cp dist/hptdrv-monitor.service /lib/systemd/system/hptdrv-monitor.service
       fi
-      cp dist/systemd-hptdrv.service /lib/systemd/system/
+      [ "$INSTALL_DAEMON" = "1" ] && cp dist/hptdaemon.service /lib/systemd/system/hptdaemon.service
     else
       rm -f /usr/lib/systemd/system/systemd-hptdrv.service
       rm -f /usr/lib/systemd/system/hptdrv-monitor.service
@@ -260,7 +247,7 @@ procinit() {
       else
         cp dist/hptdrv-monitor.service /usr/lib/systemd/system/hptdrv-monitor.service
       fi
-      cp dist/systemd-hptdrv.service /usr/lib/systemd/system/	
+      [ "$INSTALL_DAEMON" = "1" ] && cp dist/hptdaemon.service /usr/lib/systemd/system/hptdaemon.service
     fi
     # suse 13.1 bug
     if test -f "/usr/lib/systemd/system/network@.service"; then
@@ -278,12 +265,7 @@ procinit() {
 
     systemctl daemon-reload >/dev/null 2>&1
     systemctl enable hptdrv-monitor
-    systemctl enable systemd-hptdrv >/dev/null 2>&1
     systemctl start  hptdrv-monitor > /dev/null 2>&1
-
-    rm -f /etc/init.d/hptmod
-    cp dist/hptmod /etc/init.d/
-    chmod 755 /etc/init.d/hptmod
   elif type insserv >/dev/null 2>&1; then
     insserv -r /etc/init.d/hptdrv-monitor
     insserv /etc/init.d/hptdrv-monitor

@@ -699,6 +699,11 @@ int  os_printk(char *fmt, ...)
 	va_start(args, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);
+
+	/* Suppress noisy FIS error register dumps from HIM during init */
+	if (buf[0] == 'f' && buf[1] == 'e' && buf[2] == ' ')
+		return 0;
+
 	return printk("%s:%s\n", driver_name, buf);
 }
 

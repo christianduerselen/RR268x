@@ -1,0 +1,13 @@
+[Unit]
+Description=HighPoint RocketRAID management daemon
+After=hptmod.service
+Requires=hptmod.service
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/hptsvr
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
